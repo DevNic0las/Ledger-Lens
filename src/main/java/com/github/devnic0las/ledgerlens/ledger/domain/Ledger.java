@@ -1,7 +1,6 @@
 package com.github.devnic0las.ledgerlens.ledger.domain;
 
 import com.github.devnic0las.ledgerlens.account.domain.Account;
-import com.github.devnic0las.ledgerlens.account.domain.AccountType;
 
 import java.util.*;
 
@@ -9,17 +8,23 @@ public class Ledger {
 
   private final Map<UUID, Account> accounts = new HashMap<>();
   private final List<Transaction> transactions = new ArrayList<>();
-  private final Set<String> usedKeys = new HashSet<>();
+  private final Map<String, Transaction> postedByKey = new HashMap<>();
 
   public void register(Account account) {
 
     accounts.put(account.id(), account);
 
   }
-  public void post(Transaction transaction) {
+  public PostResult post(Transaction transaction) {
 
-    if(usedKeys.contains(transaction.idempotencyKey())) {
-      throw new IllegalArgumentException("Transaction with this idempotency key has already been posted");
+  Transaction posted = postedByKey.get(transaction.idempotencyKey());
+
+    if (posted != null) {
+      if (sameContent(posted, transaction)) {
+        return PostResult.DUPLICATE;
+      }
+      throw new IllegalArgumentException(
+              "Idempotency key reused with different content: " + transaction.idempotencyKey());
     }
 
     transaction.entries().forEach(entry -> {
@@ -29,9 +34,11 @@ public class Ledger {
     });
 
     transactions.add(transaction);
-    usedKeys.add(transaction.idempotencyKey());
+    postedByKey.put(transaction.idempotencyKey(), transaction);
 
+    return PostResult.POSTED;
   }
+
   public long balanceOf(UUID accountId) {
 
     Account account = accounts.get(accountId);
@@ -55,4 +62,20 @@ public class Ledger {
     return balance;
 
   }
+  private boolean sameContent(Transaction a, Transaction b) {
+    return shapesOf(a).equals(shapesOf(b));
+  }
+
+  private Map<EntryShape, Long> shapesOf(Transaction t) {
+    Map<EntryShape, Long> shapes = new HashMap<>();
+
+    for (Entry entry : t.entries()) {
+      var shape = new EntryShape(entry.accountId(), entry.direction(), entry.amountCents());
+      shapes.merge(shape, 1L, Long::sum);
+    }
+
+    return shapes;
+  }
+
+  private record EntryShape(UUID accountId, Direction direction, long amountCents) {}
 }

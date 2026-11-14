@@ -2,10 +2,7 @@ package com.github.devnic0las.ledgerlens;
 
 import com.github.devnic0las.ledgerlens.account.domain.Account;
 import com.github.devnic0las.ledgerlens.account.domain.AccountType;
-import com.github.devnic0las.ledgerlens.ledger.domain.Direction;
-import com.github.devnic0las.ledgerlens.ledger.domain.Entry;
-import com.github.devnic0las.ledgerlens.ledger.domain.Ledger;
-import com.github.devnic0las.ledgerlens.ledger.domain.Transaction;
+import com.github.devnic0las.ledgerlens.ledger.domain.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -70,4 +67,30 @@ public class LedgerTest {
 
     assertEquals(10_000, ledger.balanceOf(checking.id()));
   }
+
+
+  @Test
+  void postingSameKeyTwiceReturnsDuplicateAndKeepsBalance() {
+
+    ledger.register(checking);
+    ledger.register(revenue);
+    var transaction = pix("chave-1", 10_000);
+
+
+    assertEquals(PostResult.POSTED, ledger.post(transaction));
+
+    assertEquals(PostResult.DUPLICATE, ledger.post(transaction));
+
+    assertEquals(10_000, ledger.balanceOf(checking.id()));
+    assertEquals(10_000, ledger.balanceOf(revenue.id()));
+  }
+
+  @Test
+  void sameKeyWithDifferentContentThrows() {
+    ledger.register(checking);
+    ledger.register(revenue);
+    ledger.post(pix("chave-1", 10_000));
+    assertThrows(IllegalArgumentException.class, () -> ledger.post(pix("chave-1", 99_999)));
+  }
+
 }
