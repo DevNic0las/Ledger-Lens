@@ -1,10 +1,22 @@
 package com.github.devnic0las.ledgerlens.account.domain;
 
-public enum AccountType {
+import com.github.devnic0las.ledgerlens.ledger.domain.Direction;
 
-  ASSET,
-  LIABILITY,
-  EQUITY,
-  REVENUE,
-  EXPENSE
+
+public enum AccountType {
+  ASSET(Direction.DEBIT),
+  EXPENSE(Direction.DEBIT),
+  LIABILITY(Direction.CREDIT),
+  EQUITY(Direction.CREDIT),
+  REVENUE(Direction.CREDIT);
+
+  private final Direction normalSide;
+
+  AccountType(Direction normalSide) {
+    this.normalSide = normalSide;
+  }
+
+  public Direction normalSide() {
+    return normalSide;
+  }
 }

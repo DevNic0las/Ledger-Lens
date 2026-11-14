@@ -3,6 +3,7 @@ package com.github.devnic0las.ledgerlens;
 import com.github.devnic0las.ledgerlens.ledger.domain.Direction;
 import com.github.devnic0las.ledgerlens.ledger.domain.Entry;
 import com.github.devnic0las.ledgerlens.ledger.domain.Transaction;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -15,29 +16,34 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class TransactionTest   {
 
+  private UUID checkingAccountId;
+  private UUID revenueAccountId;
+
+  @BeforeEach
+  void setUp() {
+    checkingAccountId = UUID.randomUUID();
+    revenueAccountId = UUID.randomUUID();
+  }
+
+  private Transaction pix(String idempotencyKey, long debitCents, long creditCents) {
+    var entries = List.of(
+            new Entry(UUID.randomUUID(), checkingAccountId, Direction.DEBIT, debitCents),
+            new Entry(UUID.randomUUID(), revenueAccountId, Direction.CREDIT, creditCents)
+    );
+    return new Transaction(UUID.randomUUID(), Instant.now(), "Pix", idempotencyKey, entries);
+  }
 
   @Test
   void shouldRejectTransactionUnbalanced() {
-
-    var entries = List.of(
-            new Entry(UUID.randomUUID(), UUID.randomUUID(), Direction.DEBIT, 10_000),
-            new Entry(UUID.randomUUID(), UUID.randomUUID(), Direction.CREDIT, 9_000)
-    );
-
     assertThrows(IllegalArgumentException.class, () ->
-            new Transaction(UUID.randomUUID(), Instant.now(), "Pix", "chave-1", entries)
+            pix("chave-1", 10_000, 9_000)
     );
 
   }
 
   @Test
   void shouldAcceptTransactionBalanced() {
-    var entries = List.of(
-            new Entry(UUID.randomUUID(), UUID.randomUUID(), Direction.DEBIT, 10_000),
-            new Entry(UUID.randomUUID(), UUID.randomUUID(), Direction.CREDIT, 10_000)
-    );
-
-    assertDoesNotThrow(() -> new Transaction(UUID.randomUUID(), Instant.now(), "Pix", "chave-1", entries));
+    assertDoesNotThrow(() -> pix("chave-1", 10_000, 10_000));
   }
 
   @Test
@@ -57,4 +63,3 @@ public class TransactionTest   {
   }
 
 }
-
