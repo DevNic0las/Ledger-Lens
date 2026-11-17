@@ -99,7 +99,7 @@ Fonte: [`docs/STATUS.md`](docs/STATUS.md), sem maquiagem.
 | 3 | Schema Flyway e testes das constraints | **PARCIAL** — migration existe; os testes JDBC não estão versionados |
 | 4 | Repositórios JDBC (Ledger grava/lê do Postgres) | **NÃO FEITO** |
 | 5 | Saldo calculado em SQL | **NÃO FEITO** |
-| 6 | Idempotência no banco com concorrência | **PARCIAL** — só a `UNIQUE`; sem teste com duas threads |
+| 6 | Idempotência no banco com concorrência | **NÃO FEITO** — só a `UNIQUE` existe; nada a consome, sem teste com duas threads |
 | 7 | API REST | **NÃO FEITO** — só Actuator/OpenAPI vazio |
 | 8 | CI e proteção da `main` | **PARCIAL** — CI roda `./mvnw -B verify`; proteção não verificável aqui |
 | 9 | PgVectorStore / JPA | **NÃO FEITO** — dependências sem uso |

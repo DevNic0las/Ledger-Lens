@@ -17,7 +17,7 @@ Data da inspeção: 2026-11-17.
 | 3 | Schema Flyway e testes das constraints | **PARCIAL** |
 | 4 | Repositórios JDBC (Ledger grava/lê do Postgres) | **NÃO FEITO** |
 | 5 | Saldo calculado em SQL | **NÃO FEITO** |
-| 6 | Idempotência no banco com concorrência | **PARCIAL** (só a constraint) |
+| 6 | Idempotência no banco com concorrência | **NÃO FEITO** (só a constraint, sem consumo) |
 | 7 | API REST | **NÃO FEITO** (existe só Actuator/OpenAPI vazio) |
 | 8 | CI e proteção da `main` | **PARCIAL** (CI FEITO, proteção não verificável) |
 | 9 | PgVectorStore / JPA | **NÃO FEITO** (dependências sem uso) |
@@ -130,17 +130,20 @@ só aparece dentro do `.class` órfão citado no item 3 — não no código-font
   que serve "para somar lançamentos por conta ao calcular o saldo" — mas **a query não
   existe**. O cálculo real é o laço Java em `Ledger.balanceOf`.
 
-## 6. Idempotência no banco com tratamento de concorrência — PARCIAL
+## 6. Idempotência no banco com tratamento de concorrência — NÃO FEITO
 
-**Feito (só a constraint):** `transaction.idempotency_key TEXT NOT NULL UNIQUE`
-em `V1__create_ledger_schema.sql`. Um `INSERT` duplicado falha com SQLState `23505`.
+**Existe apenas a constraint, não a funcionalidade:** `transaction.idempotency_key
+TEXT NOT NULL UNIQUE` em `V1__create_ledger_schema.sql`. Um `INSERT` duplicado falharia com
+SQLState `23505` — mas nada faz esse `INSERT`.
 
 **Não feito:**
 
 - Nenhum código de aplicação faz `INSERT` em `transaction`, então a `UNIQUE` nunca é
   usada em produção — só existiria em teste.
 - Não há tradução de `23505` para `PostResult.DUPLICATE`; a idempotência real do sistema
-  é o `HashMap postedByKey` do `Ledger` em memória.
+  é o `HashMap postedByKey` do `Ledger` em memória. O banco vira fonte de verdade quando o
+  post fizer `INSERT` e tratar a violação de `UNIQUE` dentro de uma transação — próximo PR,
+  não este.
 - **Não existe teste com duas threads.** Nenhuma ocorrência em `src/`:
 
 ```
