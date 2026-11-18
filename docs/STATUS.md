@@ -12,7 +12,7 @@ Data da inspeção: 2026-11-17.
 
 | # | Item | Estado |
 |---|------|--------|
-| 1 | Domínio em Java puro (`account/` e `ledger/`) | **FEITO** |
+| 1 | Domínio em Java puro (`account/domain` e `ledger/domain`, sem Spring/SQL) | **FEITO** |
 | 2 | Regras do domínio | **FEITO** (só em memória) |
 | 3 | Schema Flyway e testes das constraints | **PARCIAL** |
 | 4 | Repositórios JDBC (Ledger grava/lê do Postgres) | **NÃO FEITO** |
@@ -26,17 +26,21 @@ Data da inspeção: 2026-11-17.
 
 ## 1. Domínio em Java puro — FEITO
 
-`account/` e `ledger/` não têm nenhum import de Spring, nem anotação de persistência.
+A camada de domínio (`account/domain` e `ledger/domain`) é Java puro: sem Spring, sem SQL e
+sem persistência. `application` e `infrastructure` (por exemplo `ledger/infrastructure`) podem
+usar Spring, mas dependem do domínio — nunca o contrário.
 
-Evidência (comando executado na raiz do repositório):
+Evidência (comando executado na raiz do repositório, escopo restrito a `*/domain/`):
 
 ```
-$ grep -rn "org\.springframework" src/main/java/.../account src/main/java/.../ledger
-$ echo $?
-1        # nenhuma ocorrência
+$ grep -rnE "springframework|JdbcClient|SELECT|INSERT|sql\(" src/main/java --include=*.java -r | grep "/domain/"
+(sem saída)
 ```
 
-Também não há `jakarta.persistence`, `@Entity` nem `@Repository` em `src/main`.
+O escopo é `*/domain/` de propósito: `src/main/java/.../ledger` contém também
+`ledger/infrastructure`, onde o adaptador JDBC e o SQL devem morar.
+
+Também não há `jakarta.persistence`, `@Entity` nem `@Repository` em `*/domain/`.
 
 Arquivos que compõem o domínio:
 
