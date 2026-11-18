@@ -1,5 +1,5 @@
 Regras de trabalho neste repositório (ledgerlens):
-- A camada de domínio (subpacotes account/domain e ledger/domain) é Java puro, sem Spring, SQL ou persistência. Application e infrastructure podem usar Spring. A dependência aponta sempre para o domínio. Não altere regras de domínio sem eu pedir.
+- A camada de domínio (subpacotes account/domain e ledger/domain) é Java puro, sem Spring, SQL ou persistência. Application e infrastructure podem usar Spring. A dependência aponta sempre para o domínio. Application depende só do domínio. Infrastructure depende do domínio e implementa as portas. Application nunca importa infrastructure. Não altere regras de domínio sem eu pedir.
 - Uma tarefa = uma branch = um PR pequeno. Não misture mudanças.
 - Teste primeiro: mostre o teste falhando, depois a implementação, depois passando.
 - Antes de cada PR, explique em até 5 linhas: o que mudou, por que, e qual alternativa você descartou.

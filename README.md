@@ -86,9 +86,17 @@ com.github.devnic0las.ledgerlens
 **Regra de dependência:** a camada de domínio não conhece Spring, SQL nem persistência.
 Os subpacotes `account/domain` e `ledger/domain` não têm nenhum import de
 `org.springframework`, nenhuma chamada `JdbcClient`/`sql(...)` e nenhum SQL literal
-(verificado por grep com escopo em `*/domain/`). As dependências apontam para dentro:
-`application` e `infrastructure` podem usar Spring, mas sempre dependem do domínio;
-adaptadores (JDBC, REST) ficam em `*/infrastructure`, fora de `*/domain`.
+(verificado por grep com escopo em `*/domain/`).
+
+O fluxo de dependência é sempre para dentro:
+
+- **`application` depende só do domínio.** Orquestra casos de uso chamando as portas do
+  domínio; não conhece JDBC, REST, `DataSource` nem `TransactionTemplate`.
+- **`infrastructure` depende do domínio e implementa as portas.** É onde vivem os
+  adaptadores (JDBC, REST), o SQL e o Spring de persistência — por exemplo
+  `ledger/infrastructure/JdbcLedgerRepository` implementa `ledger/domain/LedgerRepository`.
+- **`application` nunca importa `infrastructure`.** Quem liga as duas pontas é o Spring,
+  no bootstrap (`LedgerlensApplication`), não o caso de uso.
 
 ## 5. Estado atual
 
