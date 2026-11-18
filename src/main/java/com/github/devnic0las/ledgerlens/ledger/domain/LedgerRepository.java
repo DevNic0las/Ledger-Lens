@@ -21,4 +21,17 @@ public interface LedgerRepository {
   Optional<Transaction> findById(UUID id);
 
   Optional<Transaction> findByIdempotencyKey(String idempotencyKey);
+
+  /**
+   * Saldo derivado dos lançamentos da conta, em centavos inteiros, respeitando o lado
+   * normal do tipo de conta: {@code ASSET}/{@code EXPENSE} somam débito,
+   * {@code LIABILITY}/{@code EQUITY}/{@code REVENUE} somam crédito.
+   *
+   * <p>Pode ser negativo: crédito maior que débito numa conta de ativo é um saldo
+   * devedor/credor invertido, e o ledger não esconde isso.
+   *
+   * @throws IllegalArgumentException se a conta não existir. Conta existente sem
+   *         lançamentos devolve {@code 0}, que é diferente de conta inexistente.
+   */
+  long balanceOf(UUID accountId);
 }
