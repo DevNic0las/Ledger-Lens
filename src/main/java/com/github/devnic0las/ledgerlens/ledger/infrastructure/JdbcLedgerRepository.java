@@ -1,5 +1,6 @@
 package com.github.devnic0las.ledgerlens.ledger.infrastructure;
 
+import com.github.devnic0las.ledgerlens.account.domain.AccountType;
 import com.github.devnic0las.ledgerlens.ledger.domain.Direction;
 import com.github.devnic0las.ledgerlens.ledger.domain.Entry;
 import com.github.devnic0las.ledgerlens.ledger.domain.LedgerRepository;
@@ -60,6 +61,39 @@ public class JdbcLedgerRepository implements LedgerRepository {
   @Override
   public Optional<Transaction> findByIdempotencyKey(String idempotencyKey) {
     return findOne("SELECT * FROM transaction WHERE idempotency_key = :key", "key", idempotencyKey);
+  }
+
+  /**
+   * Deriva o saldo no banco, sem coluna de saldo e sem carregar lançamentos na JVM.
+   *
+   * <p>É uma única query de propósito: checar a existência da conta em um SELECT e somar
+   * em outro abriria uma janela em que a conta existe para uma query e não para a outra.
+   * O {@code LEFT JOIN} resolve as duas informações no mesmo snapshot: a conta vem do
+   * lado esquerdo (logo, existe), e a soma é 0 quando não há lançamento.
+   *
+   * <p>O {@code CASE} repete o lado normal de {@link AccountType#normalSide()} em SQL,
+   * porque o banco não tem os enums do domínio. Essa duplicação é intencional e é
+   * vigiada pelo teste que compara os dois cálculos nos cinco tipos de conta.
+   */
+  @Override
+  public long balanceOf(UUID accountId) {
+    return jdbc.sql("""
+                    SELECT COALESCE(SUM(
+                               CASE
+                                   WHEN a.type IN ('ASSET', 'EXPENSE') AND e.direction = 'DEBIT' THEN e.amount_cents
+                                   WHEN a.type IN ('ASSET', 'EXPENSE') AND e.direction = 'CREDIT' THEN -e.amount_cents
+                                   WHEN a.type IN ('LIABILITY', 'EQUITY', 'REVENUE') AND e.direction = 'CREDIT' THEN e.amount_cents
+                                   WHEN a.type IN ('LIABILITY', 'EQUITY', 'REVENUE') AND e.direction = 'DEBIT' THEN -e.amount_cents
+                               END), 0)
+                    FROM account a
+                    LEFT JOIN entry e ON e.account_id = a.id
+                    WHERE a.id = :accountId
+                    GROUP BY a.id
+                    """)
+            .param("accountId", accountId)
+            .query(Long.class)
+            .optional()
+            .orElseThrow(() -> new IllegalArgumentException("Account not found: " + accountId));
   }
 
   private void insert(Transaction transaction) {
