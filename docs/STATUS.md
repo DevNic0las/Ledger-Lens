@@ -15,8 +15,8 @@ Data da inspeção: 2026-11-17.
 | 1 | Domínio em Java puro (`account/domain` e `ledger/domain`, sem Spring/SQL) | **FEITO** |
 | 2 | Regras do domínio | **FEITO** (só em memória) |
 | 3 | Schema Flyway e testes das constraints | **PARCIAL** |
-| 4 | Repositórios JDBC (Ledger grava/lê do Postgres) | **NÃO FEITO** |
-| 5 | Saldo calculado em SQL | **NÃO FEITO** |
+| 4 | Repositórios JDBC (Ledger grava/lê do Postgres) | **FEITO** — porta no domínio, adaptador `JdbcClient` |
+| 5 | Saldo calculado em SQL | **FEITO** — um `SUM`/`GROUP BY`, sem coluna de saldo |
 | 6 | Idempotência no banco com concorrência | **NÃO FEITO** (só a constraint, sem consumo) |
 | 7 | API REST | **NÃO FEITO** (existe só Actuator/OpenAPI vazio) |
 | 8 | CI e proteção da `main` | **PARCIAL** (CI FEITO, proteção não verificável) |
@@ -112,27 +112,59 @@ Existe apenas um artefato de build órfão, de 2026-11-14 15:10, em
 "Tests run: 8, Failures: 0". Ele é apagado no próximo `mvnw clean` e **não roda** no
 `./mvnw verify` atual. Portanto, as constraints têm schema, mas **não têm prova versionada**.
 
-## 4. Repositórios JDBC — NÃO FEITO
+## 4. Repositórios JDBC — FEITO
 
-Não existe nenhum repositório. O `Ledger` não toca no Postgres.
+A porta está no domínio e a implementação está na infraestrutura:
+
+- `src/main/java/.../ledger/domain/LedgerRepository.java` — interface sem Spring e sem SQL,
+  com `save`, `findById`, `findByIdempotencyKey` e `balanceOf`.
+- `src/main/java/.../ledger/infrastructure/JdbcLedgerRepository.java` — implementação com
+  `JdbcClient`, anotada como `@Repository`.
+
+Evidência:
 
 ```
-$ grep -rn "JdbcTemplate\|DataSource\|SimpleJdbcInsert" src/main/java
-(sem saída)
+$ grep -rn "interface LedgerRepository" src/main/java
+.../ledger/domain/LedgerRepository.java:10:public interface LedgerRepository {
+
+$ grep -rn "class JdbcLedgerRepository" src/main/java
+.../ledger/infrastructure/JdbcLedgerRepository.java:29:public class JdbcLedgerRepository implements LedgerRepository {
 ```
 
-Não há `src/main/java/.../ledger/adapter`, nem `repository`, nem `*Jdbc*`. O `JdbcTemplate`
-só aparece dentro do `.class` órfão citado no item 3 — não no código-fonte versionado.
-`Ledger` guarda tudo em `Map`/`List` na heap do processo.
+O `save` grava a transação e todos os lançamentos dentro de um único `TransactionTemplate`:
+se um lançamento falha, nada é gravado. A idempotência é decidida pela `UNIQUE` de
+`idempotency_key` (SQLState `23505`), traduzida para `PostResult.DUPLICATE`.
 
-## 5. Saldo calculado em SQL — NÃO FEITO
+Prova (teste, não inspeção):
+`JdbcLedgerRepositoryTest` — 6 testes, incluindo round-trip da transação com lançamentos,
+duplicata gravada uma vez só e `failingEntrySavesNothing` (rollback quando um lançamento
+falha). Sem passar o `TransactionTemplate`, esse último falha com `expected: <0> but was: <1>`.
 
-- Não existe coluna de saldo (correto: `V1__create_ledger_schema.sql` só tem
-  `account`, `transaction`, `entry`).
-- Não existe nenhuma query de `SUM(...)`, nem `GROUP BY` em lugar algum.
-- O único vestígio é o índice `entry_account_id_idx`, cujo comentário na migration diz
-  que serve "para somar lançamentos por conta ao calcular o saldo" — mas **a query não
-  existe**. O cálculo real é o laço Java em `Ledger.balanceOf`.
+O `Ledger` em memória continua existindo e sendo usado pelos testes do domínio; ele **não**
+é o caminho de persistência.
+
+## 5. Saldo calculado em SQL — FEITO
+
+- Continua **sem coluna de saldo**: `V1__create_ledger_schema.sql` só tem `account`,
+  `transaction` e `entry`.
+- O saldo é derivado em uma **única** query, em
+  `JdbcLedgerRepository.balanceOf`:
+
+```
+$ grep -n "LEFT JOIN\|GROUP BY\|SUM(" src/main/java/.../ledger/infrastructure/JdbcLedgerRepository.java
+81:                    SELECT COALESCE(SUM(
+89:                    LEFT JOIN entry e ON e.account_id = a.id
+91:                    GROUP BY a.id
+```
+
+O `account LEFT JOIN entry` devolve existência e soma no mesmo snapshot: conta inexistente
+não gera linha (→ `IllegalArgumentException`, como no `Ledger` em memória) e conta sem
+lançamentos gera uma linha com `0`. O `CASE` reproduz o lado normal de
+`AccountType.normalSide()` em SQL, e essa duplicação é vigiada pelo teste comparativo.
+
+Prova (teste, não inspeção): `JdbcLedgerRepositoryBalanceTest` — 9 testes: um cenário com
+valor esperado escrito à mão por tipo de conta, saldo negativo, saldo zero, conta
+inexistente, e a comparação do SQL com `Ledger.balanceOf` percorrendo `AccountType.values()`.
 
 ## 6. Idempotência no banco com tratamento de concorrência — NÃO FEITO
 
@@ -233,21 +265,23 @@ Comando executado na raiz, com Docker disponível (Testcontainers sobe `postgres
 ```
 $ ./mvnw -B verify
 ...
-[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in ...LedgerlensApplicationTests
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0 -- in ...LedgerSchemaTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0 -- in ...JdbcLedgerRepositoryBalanceTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0 -- in ...JdbcLedgerRepositoryTest
 [INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0 -- in ...LedgerTest
 [INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0 -- in ...TransactionTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in ...LedgerlensApplicationTests
 [INFO] Results:
-[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 33, Failures: 0, Errors: 0, Skipped: 0
 [INFO] BUILD SUCCESS
 ```
 
-**10 testes, 0 falhas, BUILD SUCCESS.** (O tempo total varia com o cache da imagem
-`postgres:17`: 44 s na primeira execução, ~22 s na seguinte.)
+**33 testes, 0 falhas, BUILD SUCCESS.** (O tempo total varia com o cache da imagem
+`postgres:17`.)
 
-Observação: `LedgerSchemaTest` (8 testes) aparece em um relatório antigo em
-`target/surefire-reports`, de 2026-11-14, mas **não é compilado nem executado** hoje
-porque o arquivo-fonte não está no repositório. Se ele fosse contado, o total seria 18;
-o número real e reproduzível é **10**.
+O `LedgerSchemaTest` (8 testes), que antes só existia como relatório órfão em
+`target/surefire-reports`, está versionado e roda no `verify`. Os outros 25 somam os
+testes de persistência (6 + 9) e os de domínio (5 + 4 + 1).
 
 ## Limitações conhecidas
 
