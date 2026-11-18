@@ -19,6 +19,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -88,31 +89,35 @@ class JdbcLedgerRepositoryBalanceTest {
   }
 
   /**
-   * O SQL e o Ledger em memória concordam para as mesmas contas e transações, nos cinco
-   * tipos. Este teste é o que protege a duplicação da regra de lado normal que existe
-   * entre AccountType.normalSide() e o CASE da query.
+   * O SQL e o Ledger em memória concordam para as mesmas contas e transações. Este teste
+   * é o que protege a duplicação da regra de lado normal que existe entre
+   * AccountType.normalSide() e o CASE da query.
+   *
+   * <p>A conta é criada a partir de {@link AccountType#values()}, e não de uma lista fixa
+   * de tipos: um tipo novo no enum entra no cenário automaticamente. Cada conta recebe
+   * débito e crédito, então as duas direções são exercitadas em todos os tipos. Se um tipo
+   * novo não tiver ramo no CASE do SQL, a soma dele cai no NULL do CASE e a comparação
+   * com o Ledger em memória falha — é assim que o tipo órfão aparece, sem que o SQL
+   * precise validar nada.
    */
   @Test
   void sqlBalanceMatchesInMemoryLedgerForEveryAccountType() {
     var ledger = new Ledger();
-    var accounts = List.of(
-            anAccountRegisteredIn(ledger, "Ativo", "ASSET"),
-            anAccountRegisteredIn(ledger, "Despesa", "EXPENSE"),
-            anAccountRegisteredIn(ledger, "Passivo", "LIABILITY"),
-            anAccountRegisteredIn(ledger, "Patrimônio", "EQUITY"),
-            anAccountRegisteredIn(ledger, "Receita", "REVENUE"));
+    var accounts = new ArrayList<Account>();
 
-    var transactions = List.of(
-            pair(accounts.get(0), Direction.DEBIT, 10_000, Direction.CREDIT, accounts.get(4)),
-            pair(accounts.get(1), Direction.DEBIT, 4_000, Direction.CREDIT, accounts.get(2)),
-            pair(accounts.get(2), Direction.DEBIT, 1_500, Direction.CREDIT, accounts.get(0)),
-            pair(accounts.get(3), Direction.CREDIT, 7_000, Direction.DEBIT, accounts.get(0)),
-            pair(accounts.get(0), Direction.DEBIT, 900, Direction.CREDIT, accounts.get(1)),
-            pair(accounts.get(4), Direction.DEBIT, 300, Direction.CREDIT, accounts.get(3)));
+    // Contrapartida neutra: só existe para equilibrar as transações.
+    var counterpart = anAccountRegisteredIn(ledger, "Contrapartida", AccountType.ASSET);
 
-    for (Transaction transaction : transactions) {
-      repository.save(transaction);
-      ledger.post(transaction);
+    int cents = 1_000;
+    for (AccountType type : AccountType.values()) {
+      var account = anAccountRegisteredIn(ledger, "Conta " + type, type);
+      accounts.add(account);
+
+      // Débito e crédito na mesma conta, valores diferentes, para os dois lados do tipo.
+      cents += 1_000;
+      pairAndPost(ledger, account, Direction.DEBIT, cents, counterpart);
+      cents += 1_000;
+      pairAndPost(ledger, account, Direction.CREDIT, cents, counterpart);
     }
 
     for (Account account : accounts) {
@@ -121,6 +126,13 @@ class JdbcLedgerRepositoryBalanceTest {
               repository.balanceOf(account.id()),
               "saldo divergiu na conta " + account.name() + " (" + account.type() + ")");
     }
+  }
+
+  private void pairAndPost(Ledger ledger, Account account, Direction direction, long cents, Account counterpart) {
+    var opposite = direction == Direction.DEBIT ? Direction.CREDIT : Direction.DEBIT;
+    var transaction = pair(account, direction, cents, opposite, counterpart);
+    repository.save(transaction);
+    ledger.post(transaction);
   }
 
   private UUID anAccount(String name, String type) {
@@ -139,6 +151,10 @@ class JdbcLedgerRepositoryBalanceTest {
     var account = new Account(id, name, "BRL", AccountType.valueOf(type));
     ledger.register(account);
     return account;
+  }
+
+  private Account anAccountRegisteredIn(Ledger ledger, String name, AccountType type) {
+    return anAccountRegisteredIn(ledger, name, type.name());
   }
 
   /** Lança a conta alvo no lado pedido e equilibra a transação na contrapartida. */

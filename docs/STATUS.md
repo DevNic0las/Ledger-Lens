@@ -14,9 +14,9 @@ Data da inspeção: 2026-11-17.
 |---|------|--------|
 | 1 | Domínio em Java puro (`account/domain` e `ledger/domain`, sem Spring/SQL) | **FEITO** |
 | 2 | Regras do domínio | **FEITO** (só em memória) |
-| 3 | Schema Flyway e testes das constraints | **PARCIAL** |
-| 4 | Repositórios JDBC (Ledger grava/lê do Postgres) | **NÃO FEITO** |
-| 5 | Saldo calculado em SQL | **NÃO FEITO** |
+| 3 | Schema Flyway e testes das constraints | **FEITO** — 8 testes versionados |
+| 4 | Repositórios JDBC (Ledger grava/lê do Postgres) | **FEITO** — porta no domínio, adaptador `JdbcClient` |
+| 5 | Saldo calculado em SQL | **FEITO** — um `SUM`/`GROUP BY`, sem coluna de saldo |
 | 6 | Idempotência no banco com concorrência | **NÃO FEITO** (só a constraint, sem consumo) |
 | 7 | API REST | **NÃO FEITO** (existe só Actuator/OpenAPI vazio) |
 | 8 | CI e proteção da `main` | **PARCIAL** (CI FEITO, proteção não verificável) |
@@ -75,9 +75,9 @@ Ressalvas:
   descrição diferente retorna `DUPLICATE` (não lança).
 - `Ledger` usa `HashMap`/`ArrayList` sem sincronização → **não é thread-safe**.
 
-## 3. Schema Flyway e testes das constraints — PARCIAL
+## 3. Schema Flyway e testes das constraints — FEITO
 
-**Feito:** a migration existe e é aplicada.
+A migration existe, é aplicada, e as constraints têm prova versionada.
 
 - `src/main/resources/db/migration/V1__create_ledger_schema.sql` cria `account`,
   `transaction` e `entry`, com `CHECK` de `type`, `CHECK` de `direction`,
@@ -88,51 +88,94 @@ Ressalvas:
 - `LedgerlensApplicationTests.contextLoads` sobe o contexto com Testcontainers
   (`postgres:17`) e passa, o que prova que a migration roda em schema vazio.
 
-**Não feito:** os testes das constraints **não estão no repositório**.
-
-O commit `cdffa99` tem a mensagem *"create ledger schema with Flyway and cover
-constraints with JDBC tests"*, mas o diff desse commit adiciona **somente o arquivo
-`.sql`** (28 linhas). `LedgerSchemaTest.java` não está em `git ls-files`, nem na árvore de
-trabalho, em nenhuma branch:
+**Os testes das constraints estão no repositório**, em
+`src/test/java/com/github/devnic0las/ledgerlens/LedgerSchemaTest.java`, e rodam no
+`./mvnw verify`:
 
 ```
-$ git log --all --oneline -- 'src/test/java/**/LedgerSchemaTest.java'
-(sem saída)
+$ git ls-files src/test/java/com/github/devnic0las/ledgerlens/LedgerSchemaTest.java
+src/test/java/com/github/devnic0las/ledgerlens/LedgerSchemaTest.java
 
-$ git ls-files src/test/java
-.../LedgerTest.java
-.../LedgerlensApplicationTests.java
-.../TestLedgerlensApplication.java
-.../TestcontainersConfiguration.java
-.../TransactionTest.java
+$ ./mvnw -B verify
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0 -- in ...LedgerSchemaTest
 ```
 
-Existe apenas um artefato de build órfão, de 2026-11-14 15:10, em
-`target/surefire-reports/com.github.devnic0las.ledgerlens.LedgerSchemaTest.txt` dizendo
-"Tests run: 8, Failures: 0". Ele é apagado no próximo `mvnw clean` e **não roda** no
-`./mvnw verify` atual. Portanto, as constraints têm schema, mas **não têm prova versionada**.
+Os 8 testes cobrem: `amount_cents` zero, negativo, `type` de conta inválido, `direction`
+inválida, FK de conta inexistente, FK de transação inexistente, `idempotency_key`
+duplicada (SQLState `23505`) e um caminho feliz que grava conta, transação e dois
+lançamentos. Os asserts usam SQLState, nunca mensagem de texto.
 
-## 4. Repositórios JDBC — NÃO FEITO
+Nota histórica: o commit `cdffa99`, cuja mensagem afirmava cobrir as constraints com
+testes JDBC, trouxe apenas o `.sql`. Durante um período o teste existiu só como artefato
+órfão em `target/surefire-reports`. Ele foi versionado no commit `d3c1cc6` (PR #4), e
+desde então é compilado e executado pelo `verify`.
 
-Não existe nenhum repositório. O `Ledger` não toca no Postgres.
+## 4. Repositórios JDBC — FEITO
+
+A porta está no domínio e a implementação está na infraestrutura:
+
+- `src/main/java/.../ledger/domain/LedgerRepository.java` — interface sem Spring e sem SQL,
+  com `save`, `findById`, `findByIdempotencyKey` e `balanceOf`.
+- `src/main/java/.../ledger/infrastructure/JdbcLedgerRepository.java` — implementação com
+  `JdbcClient`, anotada como `@Repository`.
+
+Evidência:
 
 ```
-$ grep -rn "JdbcTemplate\|DataSource\|SimpleJdbcInsert" src/main/java
-(sem saída)
+$ grep -rn "interface LedgerRepository" src/main/java
+.../ledger/domain/LedgerRepository.java:10:public interface LedgerRepository {
+
+$ grep -rn "class JdbcLedgerRepository" src/main/java
+.../ledger/infrastructure/JdbcLedgerRepository.java:29:public class JdbcLedgerRepository implements LedgerRepository {
 ```
 
-Não há `src/main/java/.../ledger/adapter`, nem `repository`, nem `*Jdbc*`. O `JdbcTemplate`
-só aparece dentro do `.class` órfão citado no item 3 — não no código-fonte versionado.
-`Ledger` guarda tudo em `Map`/`List` na heap do processo.
+O `save` grava a transação e todos os lançamentos dentro de um único `TransactionTemplate`:
+se um lançamento falha, nada é gravado. A idempotência é decidida pela `UNIQUE` de
+`idempotency_key` (SQLState `23505`), traduzida para `PostResult.DUPLICATE`.
 
-## 5. Saldo calculado em SQL — NÃO FEITO
+Prova (teste, não inspeção):
+`JdbcLedgerRepositoryTest` — 6 testes, incluindo round-trip da transação com lançamentos,
+duplicata gravada uma vez só e `failingEntrySavesNothing` (rollback quando um lançamento
+falha). Sem passar o `TransactionTemplate`, esse último falha com `expected: <0> but was: <1>`.
 
-- Não existe coluna de saldo (correto: `V1__create_ledger_schema.sql` só tem
-  `account`, `transaction`, `entry`).
-- Não existe nenhuma query de `SUM(...)`, nem `GROUP BY` em lugar algum.
-- O único vestígio é o índice `entry_account_id_idx`, cujo comentário na migration diz
-  que serve "para somar lançamentos por conta ao calcular o saldo" — mas **a query não
-  existe**. O cálculo real é o laço Java em `Ledger.balanceOf`.
+**Limite do que está provado:** persistência e idempotência por `UNIQUE` estão provadas
+por teste de integração, mas ainda **não são expostas por API nem por serviço de
+aplicação**. Não existe `@Service` nem `@RestController` em `src/main`, e nenhum código de
+produção chama `save`/`balanceOf` além do próprio adaptador:
+
+```
+$ grep -rln "@Service\|@RestController" src/main/java
+(nenhum)
+```
+
+Na prática, o schema e a porta funcionam, mas ninguém os usa pela aplicação ainda: quem
+exercita o caminho completo é o teste de integração.
+
+O `Ledger` em memória continua existindo e sendo usado pelos testes do domínio; ele **não**
+é o caminho de persistência.
+
+## 5. Saldo calculado em SQL — FEITO
+
+- Continua **sem coluna de saldo**: `V1__create_ledger_schema.sql` só tem `account`,
+  `transaction` e `entry`.
+- O saldo é derivado em uma **única** query, em
+  `JdbcLedgerRepository.balanceOf`:
+
+```
+$ grep -n "LEFT JOIN\|GROUP BY\|SUM(" src/main/java/.../ledger/infrastructure/JdbcLedgerRepository.java
+81:                    SELECT COALESCE(SUM(
+89:                    LEFT JOIN entry e ON e.account_id = a.id
+91:                    GROUP BY a.id
+```
+
+O `account LEFT JOIN entry` devolve existência e soma no mesmo snapshot: conta inexistente
+não gera linha (→ `IllegalArgumentException`, como no `Ledger` em memória) e conta sem
+lançamentos gera uma linha com `0`. O `CASE` reproduz o lado normal de
+`AccountType.normalSide()` em SQL, e essa duplicação é vigiada pelo teste comparativo.
+
+Prova (teste, não inspeção): `JdbcLedgerRepositoryBalanceTest` — 9 testes: um cenário com
+valor esperado escrito à mão por tipo de conta, saldo negativo, saldo zero, conta
+inexistente, e a comparação do SQL com `Ledger.balanceOf` percorrendo `AccountType.values()`.
 
 ## 6. Idempotência no banco com tratamento de concorrência — NÃO FEITO
 
@@ -233,26 +276,33 @@ Comando executado na raiz, com Docker disponível (Testcontainers sobe `postgres
 ```
 $ ./mvnw -B verify
 ...
-[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in ...LedgerlensApplicationTests
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0 -- in ...LedgerSchemaTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0 -- in ...JdbcLedgerRepositoryBalanceTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0 -- in ...JdbcLedgerRepositoryTest
 [INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0 -- in ...LedgerTest
 [INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0 -- in ...TransactionTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- in ...LedgerlensApplicationTests
 [INFO] Results:
-[INFO] Tests run: 10, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 33, Failures: 0, Errors: 0, Skipped: 0
 [INFO] BUILD SUCCESS
 ```
 
-**10 testes, 0 falhas, BUILD SUCCESS.** (O tempo total varia com o cache da imagem
-`postgres:17`: 44 s na primeira execução, ~22 s na seguinte.)
+**33 testes, 0 falhas, BUILD SUCCESS.** (O tempo total varia com o cache da imagem
+`postgres:17`.)
 
-Observação: `LedgerSchemaTest` (8 testes) aparece em um relatório antigo em
-`target/surefire-reports`, de 2026-11-14, mas **não é compilado nem executado** hoje
-porque o arquivo-fonte não está no repositório. Se ele fosse contado, o total seria 18;
-o número real e reproduzível é **10**.
+O `LedgerSchemaTest` (8 testes), que antes só existia como relatório órfão em
+`target/surefire-reports`, está versionado e roda no `verify`. Os outros 25 somam os
+testes de persistência (6 + 9) e os de domínio (5 + 4 + 1).
 
 ## Limitações conhecidas
 
-1. **Sem persistência.** O domínio (`Ledger`) é 100% em memória; o schema do Postgres está
-   criado mas desconectado do código. Reiniciar o processo perde tudo.
+1. **A persistência existe, mas nada em produção a chama.** O schema do Postgres está
+   ligado ao código pela porta `ledger/domain/LedgerRepository` e pelo adaptador
+   `ledger/infrastructure/JdbcLedgerRepository` (`JdbcClient`). O `Ledger` em memória ainda
+   é usado pelos testes do domínio e **não** é o caminho de persistência. O que falta não é
+   gravar/ler do banco — está provado por teste de integração —, e sim **expor isso pela
+   aplicação**: não há `@Service` nem `@RestController` chamando a porta. Não há caminho de
+   escrita exposto pela aplicação, então não há dado de produção a perder.
 2. **`Ledger` não é thread-safe.** `HashMap`/`ArrayList` sem `synchronized`/lock; o
    check-then-act da idempotência tem corrida. Não há teste com duas threads.
 3. **Idempotência ignora a descrição** (e `occurredAt` e `id`). A "mesma transação" é
@@ -261,10 +311,20 @@ o número real e reproduzível é **10**.
 4. **Sem estorno (reversal).** Não há operação, tipo de lançamento nem coluna que ligue um
    lançamento ao original. Corrigir um lançamento errado hoje exige lançar o inverso "na mão".
 5. **Sem API REST** de contas/lançamentos; só Actuator e um OpenAPI vazio.
-6. **Sem cálculo de saldo em SQL**, apesar de o índice `entry_account_id_idx` existir para isso.
+6. **Saldo é calculado em SQL, mas só por teste de integração até aqui.**
+   `JdbcLedgerRepository.balanceOf` deriva o saldo em uma única query
+   (`account LEFT JOIN entry ... GROUP BY a.id`), sem coluna de saldo, e o índice
+   `entry_account_id_idx` serve a essa soma. A paridade com `Ledger.balanceOf` é provada
+   nos cinco tipos de conta. O que ainda não existe é um endpoint ou serviço que responda
+   "qual é o saldo desta conta?" para fora da aplicação.
 7. **Banco não valida as regras do domínio.** Não há trigger/constraint que obrigue
    `soma(débitos) = soma(créditos)` nem "mínimo de 2 lançamentos" por transação. A
-   `UNIQUE` de idempotência existe, mas nada a consome.
+   `UNIQUE` de idempotência **é** consumida: `JdbcLedgerRepository.save` trata a violação
+   `23505` e a traduz para `PostResult.DUPLICATE`. O que fica pendente para a Etapa 3:
+   - (a) o `save` **não compara o conteúdo** da transação. A mesma chave com lançamentos
+     diferentes vira `DUPLICATE` em silêncio, em vez de erro de chave reutilizada.
+   - (b) **não existe teste de concorrência no nível do banco**: dois `save` simultâneos
+     com a mesma chave não são exercitados por nenhum teste.
 8. **Sem proteção de `main` verificável**, e nenhum teste de concorrência/idempotência
    no nível do banco.
 9. **`java -jar` não sobe sozinho:** `application.yaml` não define datasource, então o
@@ -278,3 +338,11 @@ o número real e reproduzível é **10**.
     com testes JDBC, mas o diff só traz a migration — os testes não estão versionados.
 12. **Sem checagem de moeda:** `Transaction`/`Entry` não validam que as contas envolvidas
     têm a mesma `currency`; `Entry` sequer carrega moeda.
+13. **Saldo é leitura consistente por statement, sem isolamento explícito.**
+    `JdbcLedgerRepository.balanceOf` resolve existência e soma em uma única query
+    (`account LEFT JOIN entry ... GROUP BY`), então não há janela entre duas leituras.
+    Ainda assim, cada chamada enxerga o snapshot do seu próprio statement: uma transação
+    commitada entre duas chamadas aparece na segunda e não na primeira, e não há
+    `REPEATABLE READ` nem transação de leitura envolvendo a operação. Isolamento explícito
+    será avaliado se a API precisar de leituras múltiplas consistentes entre si (por
+    exemplo, saldo + extrato na mesma resposta).
