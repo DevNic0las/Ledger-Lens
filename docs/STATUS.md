@@ -278,3 +278,11 @@ o número real e reproduzível é **10**.
     com testes JDBC, mas o diff só traz a migration — os testes não estão versionados.
 12. **Sem checagem de moeda:** `Transaction`/`Entry` não validam que as contas envolvidas
     têm a mesma `currency`; `Entry` sequer carrega moeda.
+13. **Saldo é leitura consistente por statement, sem isolamento explícito.**
+    `JdbcLedgerRepository.balanceOf` resolve existência e soma em uma única query
+    (`account LEFT JOIN entry ... GROUP BY`), então não há janela entre duas leituras.
+    Ainda assim, cada chamada enxerga o snapshot do seu próprio statement: uma transação
+    commitada entre duas chamadas aparece na segunda e não na primeira, e não há
+    `REPEATABLE READ` nem transação de leitura envolvendo a operação. Isolamento explícito
+    será avaliado se a API precisar de leituras múltiplas consistentes entre si (por
+    exemplo, saldo + extrato na mesma resposta).
