@@ -83,10 +83,12 @@ com.github.devnic0las.ledgerlens
 └── LedgerlensApplication   bootstrap Spring Boot (único ponto com Spring no main)
 ```
 
-**Regra de dependência:** o domínio não conhece Spring. `account/` e `ledger/` não têm
-nenhum import de `org.springframework` (verificado por grep) nem anotação de persistência.
-As dependências apontam para dentro: framework → domínio, nunca o contrário. Se um dia
-existirem adaptadores (JDBC, REST), eles ficam fora de `*/domain` e dependem do domínio.
+**Regra de dependência:** a camada de domínio não conhece Spring, SQL nem persistência.
+Os subpacotes `account/domain` e `ledger/domain` não têm nenhum import de
+`org.springframework`, nenhuma chamada `JdbcClient`/`sql(...)` e nenhum SQL literal
+(verificado por grep com escopo em `*/domain/`). As dependências apontam para dentro:
+`application` e `infrastructure` podem usar Spring, mas sempre dependem do domínio;
+adaptadores (JDBC, REST) ficam em `*/infrastructure`, fora de `*/domain`.
 
 ## 5. Estado atual
 
@@ -94,7 +96,7 @@ Fonte: [`docs/STATUS.md`](docs/STATUS.md), sem maquiagem.
 
 | # | Item | Estado |
 |---|------|--------|
-| 1 | Domínio em Java puro (`account/` e `ledger/` sem Spring) | **FEITO** |
+| 1 | Domínio em Java puro (`account/domain` e `ledger/domain` sem Spring, SQL ou persistência) | **FEITO** |
 | 2 | Regras: valor positivo, mínimo 2 lançamentos, débitos = créditos, saldo calculado, idempotência com checagem de conteúdo | **FEITO** (em memória) |
 | 3 | Schema Flyway e testes das constraints | **PARCIAL** — migration existe; os testes JDBC não estão versionados |
 | 4 | Repositórios JDBC (Ledger grava/lê do Postgres) | **NÃO FEITO** |
