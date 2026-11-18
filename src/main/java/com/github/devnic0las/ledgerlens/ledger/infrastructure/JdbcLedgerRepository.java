@@ -66,38 +66,34 @@ public class JdbcLedgerRepository implements LedgerRepository {
   /**
    * Deriva o saldo no banco, sem coluna de saldo e sem carregar lançamentos na JVM.
    *
+   * <p>É uma única query de propósito: checar a existência da conta em um SELECT e somar
+   * em outro abriria uma janela em que a conta existe para uma query e não para a outra.
+   * O {@code LEFT JOIN} resolve as duas informações no mesmo snapshot: a conta vem do
+   * lado esquerdo (logo, existe), e a soma é 0 quando não há lançamento.
+   *
    * <p>O {@code CASE} repete o lado normal de {@link AccountType#normalSide()} em SQL,
    * porque o banco não tem os enums do domínio. Essa duplicação é intencional e é
    * vigiada pelo teste que compara os dois cálculos nos cinco tipos de conta.
-   *
-   * <p>A existência da conta é checada antes da soma: conta inexistente lança, conta
-   * existente sem lançamentos devolve 0. Sem essa checagem, as duas situações dariam 0.
    */
   @Override
   public long balanceOf(UUID accountId) {
-    var type = jdbc.sql("SELECT type FROM account WHERE id = :id")
-            .param("id", accountId)
-            .query(String.class)
-            .optional()
-            .orElseThrow(() -> new IllegalArgumentException("Account not found: " + accountId));
-
-    var normalSide = AccountType.valueOf(type).normalSide();
-
     return jdbc.sql("""
                     SELECT COALESCE(SUM(
                                CASE
-                                   WHEN :normalSide = 'DEBIT' AND e.direction = 'DEBIT' THEN e.amount_cents
-                                   WHEN :normalSide = 'DEBIT' AND e.direction = 'CREDIT' THEN -e.amount_cents
-                                   WHEN :normalSide = 'CREDIT' AND e.direction = 'CREDIT' THEN e.amount_cents
-                                   ELSE -e.amount_cents
+                                   WHEN a.type IN ('ASSET', 'EXPENSE') AND e.direction = 'DEBIT' THEN e.amount_cents
+                                   WHEN a.type IN ('ASSET', 'EXPENSE') AND e.direction = 'CREDIT' THEN -e.amount_cents
+                                   WHEN a.type IN ('LIABILITY', 'EQUITY', 'REVENUE') AND e.direction = 'CREDIT' THEN e.amount_cents
+                                   WHEN a.type IN ('LIABILITY', 'EQUITY', 'REVENUE') AND e.direction = 'DEBIT' THEN -e.amount_cents
                                END), 0)
-                    FROM entry e
-                    WHERE e.account_id = :accountId
+                    FROM account a
+                    LEFT JOIN entry e ON e.account_id = a.id
+                    WHERE a.id = :accountId
+                    GROUP BY a.id
                     """)
-            .param("normalSide", normalSide.name())
             .param("accountId", accountId)
             .query(Long.class)
-            .single();
+            .optional()
+            .orElseThrow(() -> new IllegalArgumentException("Account not found: " + accountId));
   }
 
   private void insert(Transaction transaction) {
