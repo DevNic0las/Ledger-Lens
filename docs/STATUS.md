@@ -301,8 +301,8 @@ testes de persistência (6 + 9) e os de domínio (5 + 4 + 1).
    `ledger/infrastructure/JdbcLedgerRepository` (`JdbcClient`). O `Ledger` em memória ainda
    é usado pelos testes do domínio e **não** é o caminho de persistência. O que falta não é
    gravar/ler do banco — está provado por teste de integração —, e sim **expor isso pela
-   aplicação**: não há `@Service` nem `@RestController` chamando a porta, então reiniciar o
-   processo nunca perde dados de uso real simplesmente porque não há uso real ainda.
+   aplicação**: não há `@Service` nem `@RestController` chamando a porta. Não há caminho de
+   escrita exposto pela aplicação, então não há dado de produção a perder.
 2. **`Ledger` não é thread-safe.** `HashMap`/`ArrayList` sem `synchronized`/lock; o
    check-then-act da idempotência tem corrida. Não há teste com duas threads.
 3. **Idempotência ignora a descrição** (e `occurredAt` e `id`). A "mesma transação" é
@@ -319,7 +319,12 @@ testes de persistência (6 + 9) e os de domínio (5 + 4 + 1).
    "qual é o saldo desta conta?" para fora da aplicação.
 7. **Banco não valida as regras do domínio.** Não há trigger/constraint que obrigue
    `soma(débitos) = soma(créditos)` nem "mínimo de 2 lançamentos" por transação. A
-   `UNIQUE` de idempotência existe, mas nada a consome.
+   `UNIQUE` de idempotência **é** consumida: `JdbcLedgerRepository.save` trata a violação
+   `23505` e a traduz para `PostResult.DUPLICATE`. O que fica pendente para a Etapa 3:
+   - (a) o `save` **não compara o conteúdo** da transação. A mesma chave com lançamentos
+     diferentes vira `DUPLICATE` em silêncio, em vez de erro de chave reutilizada.
+   - (b) **não existe teste de concorrência no nível do banco**: dois `save` simultâneos
+     com a mesma chave não são exercitados por nenhum teste.
 8. **Sem proteção de `main` verificável**, e nenhum teste de concorrência/idempotência
    no nível do banco.
 9. **`java -jar` não sobe sozinho:** `application.yaml` não define datasource, então o
