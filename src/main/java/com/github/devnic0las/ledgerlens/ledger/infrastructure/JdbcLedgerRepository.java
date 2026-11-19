@@ -3,9 +3,11 @@ package com.github.devnic0las.ledgerlens.ledger.infrastructure;
 import com.github.devnic0las.ledgerlens.account.domain.AccountType;
 import com.github.devnic0las.ledgerlens.ledger.domain.Direction;
 import com.github.devnic0las.ledgerlens.ledger.domain.Entry;
+import com.github.devnic0las.ledgerlens.ledger.domain.IdempotencyContent;
 import com.github.devnic0las.ledgerlens.ledger.domain.LedgerRepository;
 import com.github.devnic0las.ledgerlens.ledger.domain.PostResult;
 import com.github.devnic0las.ledgerlens.ledger.domain.Transaction;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -44,11 +46,16 @@ public class JdbcLedgerRepository implements LedgerRepository {
     } catch (DuplicateKeyException duplicate) {
       // O banco decide a idempotência: duas requisições com a mesma chave disputam a
       // UNIQUE, uma grava e a outra recebe 23505 com a transação inteira desfeita.
-      // Só o conflito de idempotency_key é esperado; colisão de id (PK) continua subindo.
-      // Consultar a chave depois do rollback evita depender do nome da constraint.
-      if (findByIdempotencyKey(transaction.idempotencyKey()).isPresent()) {
+      // A consulta é feita aqui (fora da transação de escrita), após o rollback.
+      var existing = findByIdempotencyKey(transaction.idempotencyKey());
+      if (existing.isPresent() && IdempotencyContent.matches(existing.get(), transaction)) {
         return PostResult.DUPLICATE;
       }
+      if (existing.isPresent()) {
+        throw new IdempotencyConflictException(
+                "Idempotency key reused with different content: " + transaction.idempotencyKey());
+      }
+      // Se não existe essa idempotency_key, a duplicidade foi de outra constraint.
       throw duplicate;
     }
   }
