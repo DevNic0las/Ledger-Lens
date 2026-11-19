@@ -6,6 +6,7 @@ import com.github.devnic0las.ledgerlens.account.domain.AccountType;
 import com.github.devnic0las.ledgerlens.ledger.domain.Direction;
 import com.github.devnic0las.ledgerlens.ledger.domain.Entry;
 import com.github.devnic0las.ledgerlens.ledger.domain.LedgerRepository;
+import com.github.devnic0las.ledgerlens.ledger.domain.PostResult;
 import com.github.devnic0las.ledgerlens.ledger.domain.Transaction;
 import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,32 +52,17 @@ public class JdbcLedgerRepositoryConcurrencyTest {
   }
 
   @Test
-  void idempotentTransactionsAreNotSavedTwice() throws InterruptedException {
+  void concurrentSavesWithSameKeyYieldExactlyOnePostedAndOneDuplicate() throws InterruptedException {
     CountDownLatch ready = new CountDownLatch(2);
     CountDownLatch start = new CountDownLatch(1);
+    AtomicReference<PostResult> t1Result = new AtomicReference<>();
+    AtomicReference<PostResult> t2Result = new AtomicReference<>();
     AtomicReference<Throwable> t1Ex = new AtomicReference<>();
     AtomicReference<Throwable> t2Ex = new AtomicReference<>();
-    Thread t1 = new Thread(()-> {
-      try {
-        ready.countDown();
-        start.await();
-        repository.save(pix("chave-1", 10_000));
-      } catch (Throwable e) {
-        t1Ex.set(e);
-      }
 
+    Thread t1 = new Thread(() -> race(ready, start, t1Result, t1Ex));
+    Thread t2 = new Thread(() -> race(ready, start, t2Result, t2Ex));
 
-
-    });
-    Thread t2 = new Thread(() -> {
-      try {
-        ready.countDown();
-        start.await();
-        repository.save(pix("chave-1", 10_000));
-      } catch (Throwable e) {
-        t2Ex.set(e);
-      }
-    });
     t1.start();
     t2.start();
     ready.await();
@@ -84,13 +70,30 @@ public class JdbcLedgerRepositoryConcurrencyTest {
     t1.join();
     t2.join();
 
-    assertNull(t1Ex.get(), "Thread 1 falhou");
-    assertNull(t2Ex.get(), "Thread 2 falhou");
+    assertNull(t1Ex.get(), "Thread 1 falhou: " + t1Ex.get());
+    assertNull(t2Ex.get(), "Thread 2 falhou: " + t2Ex.get());
 
+    // A regra: exatamente uma grava e a outra recebe DUPLICATE, nunca duas POSTED nem stava.
+    var results = List.of(t1Result.get(), t2Result.get());
+    assertEquals(1, results.stream().filter(PostResult.POSTED::equals).count(),
+            "exatamente uma thread deve receber POSTED, mas foi: " + results);
+    assertEquals(1, results.stream().filter(PostResult.DUPLICATE::equals).count(),
+            "exatamente uma thread deve receber DUPLICATE, mas foi: " + results);
 
     assertEquals(1, rowCount("transaction"));
+    assertEquals(2, rowCount("entry"));
     assertNotNull(repository.findByIdempotencyKey("chave-1"));
+  }
 
+  private void race(CountDownLatch ready, CountDownLatch start,
+                    AtomicReference<PostResult> result, AtomicReference<Throwable> error) {
+    try {
+      ready.countDown();
+      start.await();
+      result.set(repository.save(pix("chave-1", 10_000)));
+    } catch (Throwable e) {
+      error.set(e);
+    }
   }
 
 

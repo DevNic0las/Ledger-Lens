@@ -8,8 +8,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -92,6 +98,54 @@ public class LedgerTest {
     ledger.register(revenue);
     ledger.post(pix("chave-1", 10_000));
     assertThrows(IdempotencyConflictException.class, () -> ledger.post(pix("chave-1", 99_999)));
+  }
+
+  /**
+   * O mesmo contrato de concorrência que o banco entrega, aplicado ao Ledger em memória:
+   * várias threads postando a MESMA chave ao mesmo tempo devem produzir exatamente um
+   * POSTED, o restante DUPLICATE, e o saldo deve refletir UMA única vez o lançamento.
+   */
+  @Test
+  void concurrentPostsOfSameKeyProduceExactlyOnePosted() throws Exception {
+    ledger.register(checking);
+    ledger.register(revenue);
+    var transaction = pix("chave-concorrente", 10_000);
+
+    var rounds = 50;
+    var pool = Executors.newFixedThreadPool(4);
+    try {
+      for (int round = 0; round < rounds; round++) {
+        var fresh = new Ledger();
+        fresh.register(checking);
+        fresh.register(revenue);
+        var start = new CountDownLatch(1);
+        var futures = new ArrayList<Future<PostResult>>();
+
+        for (int i = 0; i < 4; i++) {
+          futures.add(pool.submit(() -> {
+            start.await();
+            return fresh.post(transaction);
+          }));
+        }
+        start.countDown();
+
+        long posted = 0;
+        long duplicates = 0;
+        for (var future : futures) {
+          var outcome = future.get(30, TimeUnit.SECONDS);
+          if (outcome == PostResult.POSTED) posted++;
+          if (outcome == PostResult.DUPLICATE) duplicates++;
+        }
+
+        assertEquals(1, posted, "rodada " + round + ": exatamente um post deve ser POSTED");
+        assertEquals(3, duplicates, "rodada " + round + ": os demais devem ser DUPLICATE");
+        assertEquals(10_000, fresh.balanceOf(checking.id()),
+                "rodada " + round + ": o saldo não pode contar a mesma chave duas vezes");
+        assertEquals(10_000, fresh.balanceOf(revenue.id()), "rodada " + round);
+      }
+    } finally {
+      pool.shutdownNow();
+    }
   }
 
 }
