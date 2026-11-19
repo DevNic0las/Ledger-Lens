@@ -8,7 +8,6 @@ import com.github.devnic0las.ledgerlens.ledger.domain.LedgerRepository;
 import com.github.devnic0las.ledgerlens.ledger.domain.PostResult;
 import com.github.devnic0las.ledgerlens.ledger.domain.Transaction;
 import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -40,24 +39,49 @@ public class JdbcLedgerRepository implements LedgerRepository {
 
   @Override
   public PostResult save(Transaction transaction) {
-    try {
-      transactionTemplate.executeWithoutResult(status -> insert(transaction));
+    return transactionTemplate.execute(status -> {
+      // ON CONFLICT (idempotency_key) DO NOTHING: a UNIQUE da chave decide a idempotência
+      // sem gerar erro. Se a chave já existir, o Postgres não grava nada e devolve 0 linhas
+      // afetadas; a transação nunca é abortada (ao contrário do INSERT puro + catch de 23505,
+      // que em Postgres invalida a transação inteira com SQLState 25P02).
+      // Apenas a constraint de idempotency_key é alvo: colisão de PK (transaction_pkey)
+      // continua subindo como DuplicateKeyException.
+      int inserted = jdbc.sql("""
+                      INSERT INTO transaction (id, occurred_at, description, idempotency_key)
+                      VALUES (:id, :occurredAt, :description, :idempotencyKey)
+                      ON CONFLICT (idempotency_key) DO NOTHING
+                      """)
+              .param("id", transaction.id())
+              .param("occurredAt", Timestamp.from(transaction.occurredAt()))
+              .param("description", transaction.description())
+              .param("idempotencyKey", transaction.idempotencyKey())
+              .update();
+
+      if (inserted == 0) {
+        // Nada foi gravado por esta chamada: a chave já existia. A linha vencedora já está
+        // visível nesta transação porque o ON CONFLICT espera a concorrente commitar.
+        return classifyExisting(transaction);
+      }
+
+      insertEntries(transaction);
       return PostResult.POSTED;
-    } catch (DuplicateKeyException duplicate) {
-      // O banco decide a idempotência: duas requisições com a mesma chave disputam a
-      // UNIQUE, uma grava e a outra recebe 23505 com a transação inteira desfeita.
-      // A consulta é feita aqui (fora da transação de escrita), após o rollback.
-      var existing = findByIdempotencyKey(transaction.idempotencyKey());
-      if (existing.isPresent() && IdempotencyContent.matches(existing.get(), transaction)) {
-        return PostResult.DUPLICATE;
-      }
-      if (existing.isPresent()) {
-        throw new IdempotencyConflictException(
-                "Idempotency key reused with different content: " + transaction.idempotencyKey());
-      }
-      // Se não existe essa idempotency_key, a duplicidade foi de outra constraint.
-      throw duplicate;
+    });
+  }
+
+  /**
+   * Decide o resultado de uma chave já existente. Chamado dentro da própria transação de
+   * escrita, quando não houve erro de banco — por isso a leitura é segura.
+   */
+  private PostResult classifyExisting(Transaction transaction) {
+    var existing = findByIdempotencyKey(transaction.idempotencyKey())
+            .orElseThrow(() -> new IllegalStateException(
+                    "ON CONFLICT DO NOTHING sem chave visível: " + transaction.idempotencyKey()));
+
+    if (IdempotencyContent.matches(existing, transaction)) {
+      return PostResult.DUPLICATE;
     }
+    throw new IdempotencyConflictException(
+            "Idempotency key reused with different content: " + transaction.idempotencyKey());
   }
 
   @Override
@@ -103,17 +127,7 @@ public class JdbcLedgerRepository implements LedgerRepository {
             .orElseThrow(() -> new IllegalArgumentException("Account not found: " + accountId));
   }
 
-  private void insert(Transaction transaction) {
-    jdbc.sql("""
-                    INSERT INTO transaction (id, occurred_at, description, idempotency_key)
-                    VALUES (:id, :occurredAt, :description, :idempotencyKey)
-                    """)
-            .param("id", transaction.id())
-            .param("occurredAt", Timestamp.from(transaction.occurredAt()))
-            .param("description", transaction.description())
-            .param("idempotencyKey", transaction.idempotencyKey())
-            .update();
-
+  private void insertEntries(Transaction transaction) {
     for (Entry entry : transaction.entries()) {
       jdbc.sql("""
                       INSERT INTO entry (id, transaction_id, account_id, direction, amount_cents)
