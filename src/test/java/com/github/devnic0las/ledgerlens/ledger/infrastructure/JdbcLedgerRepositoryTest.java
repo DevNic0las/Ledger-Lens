@@ -6,11 +6,13 @@ import com.github.devnic0las.ledgerlens.ledger.domain.Entry;
 import com.github.devnic0las.ledgerlens.ledger.domain.LedgerRepository;
 import com.github.devnic0las.ledgerlens.ledger.domain.PostResult;
 import com.github.devnic0las.ledgerlens.ledger.domain.Transaction;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.time.Instant;
@@ -18,9 +20,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
@@ -130,9 +130,39 @@ class JdbcLedgerRepositoryTest {
     assertEquals(PostResult.POSTED, repository.save(pix("chave-1", 10_000)));
   }
 
+  @Test
+  void sameIdempotencyKeyWithDifferentContentThrowsConflictAndKeepsOriginalTransaction() {
+    var original = pix("chave-1", 10_000);
+    repository.save(original);
+
+    var conflict = pix("chave-1", 99_999);
+
+    assertThrows(IdempotencyConflictException.class, () -> repository.save(conflict));
+    assertEquals(1, rowCount("transaction"));
+    assertEquals(2, rowCount("entry"));
+
+    var stored = repository.findByIdempotencyKey("chave-1").orElseThrow();
+    assertEquals(original.id(), stored.id());
+    assertEquals(
+            original.entries().stream().map(Entry::amountCents).toList(),
+            stored.entries().stream().map(Entry::amountCents).toList());
+  }
+
+  @Test
+  void primaryKeyCollisionStillPropagatesDuplicateKeyException() {
+    var id = UUID.randomUUID();
+    repository.save(pix(id, "chave-1", 10_000));
+
+    assertThrows(DuplicateKeyException.class, () -> repository.save(pix(id, "chave-2", 10_000)));
+  }
+
   private Transaction pix(String idempotencyKey, long cents) {
+    return pix(UUID.randomUUID(), idempotencyKey, cents);
+  }
+
+  private Transaction pix(UUID id, String idempotencyKey, long cents) {
     return new Transaction(
-            UUID.randomUUID(),
+            id,
             nowMicros(),
             "Pix",
             idempotencyKey,

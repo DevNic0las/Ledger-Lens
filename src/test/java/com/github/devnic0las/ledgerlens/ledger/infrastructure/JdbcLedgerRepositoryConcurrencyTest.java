@@ -1,10 +1,13 @@
 package com.github.devnic0las.ledgerlens.ledger.infrastructure;
 
 import com.github.devnic0las.ledgerlens.TestcontainersConfiguration;
+import com.github.devnic0las.ledgerlens.account.domain.Account;
+import com.github.devnic0las.ledgerlens.account.domain.AccountType;
 import com.github.devnic0las.ledgerlens.ledger.domain.Direction;
 import com.github.devnic0las.ledgerlens.ledger.domain.Entry;
 import com.github.devnic0las.ledgerlens.ledger.domain.LedgerRepository;
 import com.github.devnic0las.ledgerlens.ledger.domain.Transaction;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -89,6 +92,25 @@ public class JdbcLedgerRepositoryConcurrencyTest {
     assertNotNull(repository.findByIdempotencyKey("chave-1"));
 
   }
+
+
+  @Test
+  void sameKeyWithDifferentContentThrows() {
+
+    repository.save(pix("chave-1", 10_000));
+
+    assertThrows(
+            IdempotencyConflictException.class,
+            () -> repository.save(pix("chave-1", 99_999))
+    );
+  }
+
+
+
+
+
+
+
   private UUID anAccount(String name, String type) {
     var id = UUID.randomUUID();
     jdbc.sql("INSERT INTO account (id, name, type, currency) VALUES (:id, :name, :type, :currency)")
