@@ -1,6 +1,7 @@
 package com.github.devnic0las.ledgerlens.ledger.domain;
 
 import com.github.devnic0las.ledgerlens.account.domain.Account;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
 
 import java.util.*;
 
@@ -23,7 +24,7 @@ public class Ledger {
       if (sameContent(posted, transaction)) {
         return PostResult.DUPLICATE;
       }
-      throw new IllegalArgumentException(
+      throw new IdempotencyConflictException(
               "Idempotency key reused with different content: " + transaction.idempotencyKey());
     }
 
@@ -63,19 +64,6 @@ public class Ledger {
 
   }
   private boolean sameContent(Transaction a, Transaction b) {
-    return shapesOf(a).equals(shapesOf(b));
+    return IdempotencyContent.matches(a, b);
   }
-
-  private Map<EntryShape, Long> shapesOf(Transaction t) {
-    Map<EntryShape, Long> shapes = new HashMap<>();
-
-    for (Entry entry : t.entries()) {
-      var shape = new EntryShape(entry.accountId(), entry.direction(), entry.amountCents());
-      shapes.merge(shape, 1L, Long::sum);
-    }
-
-    return shapes;
-  }
-
-  private record EntryShape(UUID accountId, Direction direction, long amountCents) {}
 }

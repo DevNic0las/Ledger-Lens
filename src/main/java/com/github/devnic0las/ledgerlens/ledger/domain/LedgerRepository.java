@@ -1,5 +1,7 @@
 package com.github.devnic0las.ledgerlens.ledger.domain;
 
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
+
 import java.util.Optional;
 import java.util.UUID;
 
@@ -14,6 +16,8 @@ public interface LedgerRepository {
    *
    * @return {@link PostResult#POSTED} quando gravou, {@link PostResult#DUPLICATE} quando
    *         já existia transação com a mesma {@code idempotencyKey} e nada foi alterado.
+   * @throws IdempotencyConflictException quando a chave de idempotência já existe com
+   *         conteúdo diferente do recebido.
    *         Se um lançamento falhar, nada é gravado e a exceção de infraestrutura sobe.
    */
   PostResult save(Transaction transaction);

@@ -3,6 +3,7 @@ package com.github.devnic0las.ledgerlens;
 import com.github.devnic0las.ledgerlens.account.domain.Account;
 import com.github.devnic0las.ledgerlens.account.domain.AccountType;
 import com.github.devnic0las.ledgerlens.ledger.domain.*;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -90,7 +91,7 @@ public class LedgerTest {
     ledger.register(checking);
     ledger.register(revenue);
     ledger.post(pix("chave-1", 10_000));
-    assertThrows(IllegalArgumentException.class, () -> ledger.post(pix("chave-1", 99_999)));
+    assertThrows(IdempotencyConflictException.class, () -> ledger.post(pix("chave-1", 99_999)));
   }
 
 }
