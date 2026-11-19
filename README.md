@@ -13,30 +13,36 @@ Isso importa em contexto fintech porque saldo guardado é saldo que pode divergi
 calculado a partir de lançamentos imutáveis, qualquer inconsistência vira um erro detectável
 na soma, e não um número silenciosamente errado em uma coluna.
 
-> Estado: o **domínio** está implementado e testado; a **persistência e a API** ainda não.
-> O resumo honesto está na seção 5 e nos detalhes de [`docs/STATUS.md`](docs/STATUS.md).
+> **Estado:** etapas 1, 2 e 3 concluídas — domínio, persistência JDBC, saldo em SQL e
+> idempotência concorrente no banco. A **API REST não existe**. O detalhe por etapa está na
+> seção 5 e no histórico de [`docs/STATUS.md`](docs/STATUS.md).
 
 ## 2. Princípios de design
 
-1. **Saldo é calculado, nunca guardado.** `Ledger.balanceOf(accountId)` percorre os lançamentos
-   e soma/subtrai conforme o lado normal do tipo de conta (`ASSET`/`EXPENSE` → débito;
-   `LIABILITY`/`EQUITY`/`REVENUE` → crédito). Não existe coluna de saldo no schema.
-2. **Lançamentos são imutáveis.** `Transaction` e `Entry` são `record`, e `Transaction` faz
-   `List.copyOf(entries)`. Postar não altera nem apaga lançamento anterior.
+1. **Saldo é calculado, nunca guardado.** `LedgerRepository.balanceOf(accountId)` deriva o saldo
+   dos lançamentos em uma única query SQL, respeitando o lado normal do tipo de conta
+   (`ASSET`/`EXPENSE` → débito; `LIABILITY`/`EQUITY`/`REVENUE` → crédito). Não existe coluna de
+   saldo no schema.
+2. **Lançamentos são imutáveis no modelo.** `Transaction` e `Entry` são `record`, e
+   `Transaction` faz `List.copyOf(entries)`. Postar não altera nem apaga lançamento anterior.
+   O banco **não** impede `UPDATE`/`DELETE` — ver limitações na seção 6.
 3. **Toda transação fecha.** O construtor de `Transaction` rejeita a transação se
    `soma(débitos) != soma(créditos)`, e exige mínimo de 2 lançamentos.
-4. **Idempotência.** Postar duas vezes com a mesma `idempotencyKey` e o mesmo conteúdo retorna
-   `PostResult.DUPLICATE` sem duplicar o efeito; a mesma chave com conteúdo diferente lança
-   `IllegalArgumentException`.
+4. **Idempotência decidida pela constraint.** `transaction.idempotency_key` é `UNIQUE` e o
+   `INSERT` usa `ON CONFLICT (idempotency_key) DO NOTHING`. Chave nova → `POSTED`; mesma chave
+   com mesmo conteúdo → `DUPLICATE`; mesma chave com conteúdo diferente →
+   `IdempotencyConflictException`. Não existe consulta prévia (`exists` + `save`).
 5. **Dinheiro em `long` de centavos.** `Entry.amountCents` é `long` e precisa ser `> 0`.
    Nunca `double`/`float`. No banco, `amount_cents BIGINT` com `CHECK (amount_cents > 0)`.
+6. **Uma transação de banco por escrita.** `save()` grava o cabeçalho e todos os lançamentos
+   dentro do mesmo `TransactionTemplate`: ou tudo entra, ou nada entra.
 
 ## 3. Como rodar e testar
 
 Pré-requisitos reais do que existe hoje:
 
 - JDK 25 (o `pom.xml` fixa `java.version=25`).
-- Docker rodando — os testes de contexto sobem um Postgres 17 via Testcontainers.
+- Docker rodando — os testes de integração sobem um Postgres 17 via Testcontainers.
 - Não é preciso ter Maven instalado: use o wrapper (`./mvnw`).
 
 ### Testar (comando executado)
@@ -45,13 +51,23 @@ Pré-requisitos reais do que existe hoje:
 ./mvnw -B verify
 ```
 
-Resultado nesta inspeção: **10 testes, 0 falhas, `BUILD SUCCESS`**.
+Resultado nesta inspeção: **41 testes, 0 falhas, `BUILD SUCCESS`**.
+
+| Classe | Testes | O que prova |
+|--------|-------:|-------------|
+| `LedgerSchemaTest` | 8 | Constraints do schema (SQLState) |
+| `JdbcLedgerRepositoryTest` | 11 | Gravação, leitura, idempotência, rollback, retry em transação do chamador |
+| `JdbcLedgerRepositoryBalanceTest` | 9 | Saldo em SQL e paridade com o domínio nos 5 tipos de conta |
+| `JdbcLedgerRepositoryConcurrencyTest` | 2 | Duas threads na mesma chave: 1 `POSTED` + 1 `DUPLICATE` |
+| `LedgerTest` | 6 | Regras em memória, incluindo concorrência |
+| `TransactionTest` | 4 | Invariantes de `Transaction`/`Entry` |
+| `LedgerlensApplicationTests` | 1 | Contexto sobe com o schema migrado |
 
 ### Rodar a aplicação
 
 `src/main/resources/application.yaml` **não** define datasource, então `java -jar` sozinho
 falha com `Failed to configure a DataSource: 'url' attribute is not specified`. É preciso
-apontar para um Postgres. O comando que funcionou:
+apontar para um Postgres:
 
 ```bash
 # 1) suba um Postgres 17 (o Flyway aplica V1 sozinho no boot)
@@ -74,13 +90,19 @@ A aplicação sobe em `http://localhost:8080`. O que responde hoje:
 | `GET /swagger-ui.html` | `302` |
 | `/api/accounts`, `/api/transactions` | `404` (não existem) |
 
+**Não há API de domínio.** O caminho de escrita existe e funciona, mas só é exercitado pelos
+testes de integração: nenhum `@Service` e nenhum `@RestController` chamam a porta.
+
 ## 4. Estrutura de packages
 
 ```
 com.github.devnic0las.ledgerlens
-├── account/domain          Account, AccountType
-├── ledger/domain           Ledger, Transaction, Entry, Direction, PostResult
-└── LedgerlensApplication   bootstrap Spring Boot (único ponto com Spring no main)
+├── account/domain              Account, AccountType
+├── ledger/domain               Ledger, Transaction, Entry, Direction, PostResult,
+│                               LedgerRepository (porta), IdempotencyContent,
+│                               exception/IdempotencyConflictException
+├── ledger/infrastructure       JdbcLedgerRepository (adaptador JDBC)
+└── LedgerlensApplication       bootstrap Spring Boot
 ```
 
 **Regra de dependência:** a camada de domínio não conhece Spring, SQL nem persistência.
@@ -90,84 +112,97 @@ Os subpacotes `account/domain` e `ledger/domain` não têm nenhum import de
 
 O fluxo de dependência é sempre para dentro:
 
-- **`application` depende só do domínio.** Orquestra casos de uso chamando as portas do
-  domínio; não conhece JDBC, REST, `DataSource` nem `TransactionTemplate`.
-- **`infrastructure` depende do domínio e implementa as portas.** É onde vivem os
-  adaptadores (JDBC, REST), o SQL e o Spring de persistência — por exemplo
-  `ledger/infrastructure/JdbcLedgerRepository` implementa `ledger/domain/LedgerRepository`.
-- **`application` nunca importa `infrastructure`.** Quem liga as duas pontas é o Spring,
-  no bootstrap (`LedgerlensApplication`), não o caso de uso.
+- **`domain`** contém o modelo, as invariantes e a **porta** `LedgerRepository`. Não conhece
+  JDBC, REST, Spring nem `TransactionTemplate`.
+- **`infrastructure`** depende do domínio e **implementa a porta** — é onde vivem o SQL e o
+  Spring de persistência, como `ledger/infrastructure/JdbcLedgerRepository`.
+- **Não existe camada `application`.** Os diretórios `account/api`, `account/application` e
+  `account/infra` estão vazios e não versionados; não há caso de uso. É a maior lacuna atual.
+- **Domínio e infraestrutura nunca apontam para fora.** Quem liga as pontas é o Spring.
+
+`account/domain` importa `ledger/domain/Direction` (via `AccountType.normalSide()`) e
+`ledger/domain` importa `account/domain/Account` (em `Ledger`). É um ciclo entre pacotes de
+domínio — aceitável hoje, mas a resolver se um dos dois crescer.
 
 ## 5. Estado atual
 
-Fonte: [`docs/STATUS.md`](docs/STATUS.md), sem maquiagem.
+| # | Etapa | Estado |
+|---|-------|--------|
+| 1 | Schema Flyway e persistência JDBC | **CONCLUÍDA** — `V1`, `JdbcLedgerRepository`, constraints provadas por SQLState |
+| 2 | Saldo calculado em SQL | **CONCLUÍDA** — uma query, sem coluna de saldo, paridade com o domínio nos 5 tipos |
+| 3 | Idempotência e atomicidade no banco | **CONCLUÍDA** — `ON CONFLICT DO NOTHING`, concorrência testada, retry em transação do chamador |
+| 4 | API REST | **PENDENTE** — nenhum controller; OpenAPI vazio |
+| 5 | Fechamento (e2e + README) | **EM ANDAMENTO** — este README; falta e2e pela API, que depende da etapa 4 |
 
-| # | Item | Estado |
-|---|------|--------|
-| 1 | Domínio em Java puro (`account/domain` e `ledger/domain` sem Spring, SQL ou persistência) | **FEITO** |
-| 2 | Regras: valor positivo, mínimo 2 lançamentos, débitos = créditos, saldo calculado, idempotência com checagem de conteúdo | **FEITO** (em memória) |
-| 3 | Schema Flyway e testes das constraints | **PARCIAL** — migration existe; os testes JDBC não estão versionados |
-| 4 | Repositórios JDBC (Ledger grava/lê do Postgres) | **NÃO FEITO** |
-| 5 | Saldo calculado em SQL | **NÃO FEITO** |
-| 6 | Idempotência no banco com concorrência | **NÃO FEITO** — só a `UNIQUE` existe; nada a consome, sem teste com duas threads |
-| 7 | API REST | **NÃO FEITO** — só Actuator/OpenAPI vazio |
-| 8 | CI e proteção da `main` | **PARCIAL** — CI roda `./mvnw -B verify`; proteção não verificável aqui |
-| 9 | PgVectorStore / JPA | **NÃO FEITO** — dependências sem uso |
-
-O que funciona hoje: as regras contábeis e a idempotência **dentro de um processo**, em
-memória, cobertas por 10 testes. O que não funciona: nada disso é persistido, não há endpoint
-de domínio e o banco não é usado pelo código Java.
+O que funciona hoje: as regras contábeis, o saldo derivado em SQL e a idempotência concorrente
+**com persistência real no Postgres**, cobertas por 41 testes. O que não funciona: nada disso é
+alcançável de fora do processo — não há endpoint, e também não há como criar conta pela
+aplicação.
 
 ## 6. Decisões e limitações
 
 Decisões registradas que afetam o comportamento:
 
-- **Idempotência compara conta, direção e valor — e ignora a descrição.** `Ledger.sameContent`
+- **Idempotência compara conta, direção e valor — e ignora a descrição.** `IdempotencyContent`
   reduz cada lançamento a `(accountId, direction, amountCents)` e compara os multiconjuntos.
   `description`, `occurredAt` e `id` da transação são ignorados. Consequência: repetir a chave
   com a mesma conta/direção/valor mas descrição diferente é tratado como `DUPLICATE`, não como
   erro.
 - **`PostResult` só tem `POSTED` e `DUPLICATE`.** Conteúdo divergente na mesma chave não é um
-  resultado: é exceção.
+  resultado: é exceção (`IdempotencyConflictException`).
 - **A validação acontece toda no construtor do domínio**, para que seja impossível construir
   uma transação inválida — inclusive vinda de um futuro adaptador.
 - **O schema não duplica as regras do domínio.** O banco garante `amount_cents > 0`,
   `direction ∈ {DEBIT, CREDIT}`, `type` conhecido, FKs e unicidade da chave. Não há trigger
-  que force débitos = créditos.
+  que force débitos = créditos nem que impeça `UPDATE`/`DELETE` em `entry`.
+- **`ON CONFLICT (idempotency_key) DO NOTHING` em vez de `catch (DuplicateKeyException)`.**
+  Violar a `UNIQUE` no Postgres aborta a **transação inteira** (SQLState `25P02`), então o
+  `catch` só funcionava quando `save` abria a própria transação. Com `ON CONFLICT` não há erro,
+  a transação do chamador sobrevive e `save` funciona dentro de um `@Transactional`.
+  A constraint é **nomeada** no `ON CONFLICT`: colisão de PK (`transaction_pkey`) continua
+  subindo como `DuplicateKeyException` e nunca é confundida com idempotência.
+- **Ordem obrigatória nos casos de uso: `save` primeiro, efeitos colaterais depois, e só se
+  `POSTED`.** `DUPLICATE` é sucesso e **commita** o que veio antes na transação; um retry não
+  pode debitar uma conta duas vezes. Conflito de idempotência marca a transação como
+  rollback-only e nada commita — o serviço não deve capturar essa exceção, ela tem que
+  propagar para virar `409` na API.
+- **A ordem dos lançamentos não importa.** A idempotência compara multiconjunto e o domínio
+  trata `entries` como conjunto de movimentos; `findById` ordena por `id` só para leitura
+  estável.
 
 Limitações conhecidas:
 
-- **Estorno ainda não implementado.** Não há operação de reversal, nem vínculo entre um
-  lançamento e seu original. Corrigir exige lançar o inverso manualmente.
-- **O `Ledger` em memória não é thread-safe.** `HashMap`/`ArrayList` sem lock; o
-  check-then-act da idempotência tem corrida, então duas threads podem postar a mesma chave
-  e ambas receberem `POSTED`.
-- **Sem persistência:** reiniciar o processo perde contas e lançamentos. O schema Postgres
-  existe, mas nenhum código Java o usa.
-- **Sem saldo em SQL:** não há `SUM`/`GROUP BY`; o índice `entry_account_id_idx` foi criado
-  para uma query que ainda não existe.
-- **Sem API REST de domínio** e sem checagem de que as contas de uma transação compartilham a
-  mesma moeda.
+- **Sem API REST.** Nenhum endpoint de domínio; só Actuator e um OpenAPI vazio.
+- **Sem camada de aplicação.** Nenhum `@Service`; a porta só é chamada pelos testes.
+- **Sem criação de conta pela aplicação.** Não existe porta nem adaptador para `Account`;
+  as contas dos testes são inseridas por SQL direto.
+- **Lançamentos mutáveis no banco.** Não há `REVOKE`/trigger que impeça `UPDATE`/`DELETE` em
+  `entry`. A imutabilidade hoje é garantida só pelo modelo Java.
+- **O banco não valida balanceamento nem moeda.** Aceita transação desbalanceada e mistura de
+  moedas entre as contas de uma mesma transação; a regra existe apenas no domínio.
+- **Bordas numéricas e `null` não são validadas no domínio.** Soma em `long` sem `Math.addExact`
+  permite overflow que "fecha" uma transação desbalanceada; `direction = null` em `Entry` é
+  aceito e contado como crédito; `Entry.id` repetido dentro da transação não é checado.
+- **Sem estorno.** Não há operação de reversal nem vínculo entre um lançamento e seu original.
+- **`idempotency_key` é global e sem escopo.** Não há separação por cliente/conta nem limite de
+  tamanho; duas origens que usem a mesma chave colidem.
 - **`application.yaml` não configura datasource**: rodar exige variáveis de ambiente.
-- **Dependências sem uso** (JPA, PgVectorStore/Spring AI, Lombok, springdoc) aumentam o boot
-  sem entregar funcionalidade.
-- **O commit `cdffa99` diz cobrir as constraints com testes JDBC, mas só adiciona a
-  migration.** `LedgerSchemaTest.java` não está no repositório; existe apenas um relatório
-  órfão em `target/surefire-reports`, que não roda.
+- **`springdoc` está no classpath sem endpoints** para documentar.
+- **Leitura header + entries em dois statements.** `findById`/`findByIdempotencyKey` leem o
+  cabeçalho e depois os lançamentos sem transação de leitura; uma escrita concorrente entre os
+  dois pode produzir leitura inconsistente.
 
 ## 7. Próximos passos
 
-Somente o que está **PARCIAL** ou **NÃO FEITO** no STATUS — nada além disso:
+Somente o que está **PENDENTE**, na ordem do plano:
 
-1. **Versionar os testes de constraints** do schema (`LedgerSchemaTest`), restaurando o
-   estado "FEITO" do item 3.
-2. **Implementar repositórios JDBC** que gravem e leiam `account`, `transaction` e `entry`,
-   ligando o domínio ao Postgres (item 4).
-3. **Calcular o saldo em SQL** (`SUM` por conta respeitando o lado normal), usando o índice
-   já criado (item 5).
-4. **Idempotência no banco:** traduzir o `23505` da `UNIQUE` para `DUPLICATE` e adicionar teste
-   com duas threads concorrentes (item 6).
-5. **Expor a API REST** de contas e lançamentos, hoje inexistente (item 7).
-6. **Decidir o destino de JPA/PgVectorStore** — remover ou justificar com código real (item 9).
-7. **Configurar datasource padrão** e documentar a proteção de branch da `main`, hoje não
-   verificável a partir do repositório (item 8).
+1. **Etapa 4 — API REST:** `POST /transactions` (201 sucesso, 200 duplicata, 409 conflito de
+   chave, 400 desbalanceada) e `GET /accounts/{id}/balance`, com `@RestControllerAdvice` e
+   corpo JSON consistente.
+2. **Porta de `Account`** e caso de uso de criação de conta — sem isso não há como semear o
+   ledger pela aplicação.
+3. **Testes de API** (MockMvc) e `/v3/api-docs` com paths reais.
+4. **Etapa 5 — fechamento:** teste ponta a ponta pela API e README final.
+5. **Correções de integridade** (PRs separados): imutabilidade no banco, validação de moeda,
+   bordas de `long`/`null` no domínio, escopo da chave de idempotência.
+6. **Configurar datasource padrão** de desenvolvimento e documentar a proteção de branch.

@@ -1,5 +1,10 @@
 # Estado atual do ledgerlens
 
+> **Este documento é histórico, não um retrato do presente.** Cada seção abaixo descreve o
+> repositório **no momento da inspeção indicada**. Seções antigas não são reescritas: quando o
+> estado muda, uma nova inspeção datada é acrescentada ao final. Para o estado corrente, leia a
+> **última inspeção** ([19/11/2026](#inspeção-de-2026-11-19--etapa-3-concluída)).
+
 Relatório gerado a partir da inspeção do repositório na branch `docs/readme-and-status`
 (base: `main` em `cdffa99`). Nada aqui foi inferido de intenção ou de mensagem de commit:
 cada afirmação tem arquivo, teste ou saída de comando como evidência.
@@ -346,3 +351,119 @@ testes de persistência (6 + 9) e os de domínio (5 + 4 + 1).
     `REPEATABLE READ` nem transação de leitura envolvendo a operação. Isolamento explícito
     será avaliado se a API precisar de leituras múltiplas consistentes entre si (por
     exemplo, saldo + extrato na mesma resposta).
+
+---
+
+# Inspeção de 2026-11-19 — etapa 3 concluída
+
+Segunda inspeção, após a etapa 3. A seção anterior permanece como registro do estado em
+2026-11-17; **nada acima foi reescrito**. O que mudou está aqui.
+
+Base: `main` em `aefa5eb` (PRs #12 e #13).
+
+## Resumo
+
+| # | Item | Estado em 17/11 | Estado em 19/11 |
+|---|------|-----------------|-----------------|
+| 1 | Domínio em Java puro | FEITO | **FEITO** |
+| 2 | Regras do domínio | FEITO (memória) | **FEITO** — em memória e no banco |
+| 3 | Schema Flyway + testes das constraints | FEITO | **FEITO** — 8 testes, inalterado |
+| 4 | Repositórios JDBC | FEITO | **FEITO** — inalterado |
+| 5 | Saldo calculado em SQL | FEITO | **FEITO** — inalterado |
+| 6 | Idempotência no banco com concorrência | NÃO FEITO | **CONCLUÍDA** |
+| 7 | API REST | NÃO FEITO | **PENDENTE** (inalterado) |
+| 8 | CI e proteção da `main` | PARCIAL | **PARCIAL** (inalterado) |
+| 9 | PgVectorStore / JPA | NÃO FEITO | **RESOLVIDO POR REMOÇÃO** — não estão mais no `pom.xml` |
+
+## 6. Idempotência no banco — CONCLUÍDA
+
+A afirmação de 17/11 ("nenhum código faz INSERT em `transaction`", "sem teste com duas
+threads") deixou de valer. O que existe agora:
+
+- **`JdbcLedgerRepository.save`** grava cabeçalho + lançamentos em um único
+  `TransactionTemplate` (tudo ou nada) e decide idempotência pela constraint.
+- **`INSERT ... ON CONFLICT (idempotency_key) DO NOTHING`** é o mecanismo. Não há pré-consulta
+  (`exists` + `save`), nem `catch (DuplicateKeyException)`.
+- **`0` linhas afetadas** significa chave já existente → `classifyExisting` devolve
+  `PostResult.DUPLICATE` ou lança `IdempotencyConflictException`.
+- **Colisão de PK não é confundida** com idempotência: a constraint é nomeada no `ON CONFLICT`,
+  então `transaction_pkey` sobe como `DuplicateKeyException`.
+
+### Por que o mecanismo importa (desvio corrigido)
+
+A primeira implementação da etapa 3 usava `INSERT` puro + `catch (DuplicateKeyException)` e
+consultava a chave depois do rollback. Funcionava quando `save` abria a própria transação, mas
+quebrava quando chamado de dentro do `@Transactional` de um caso de uso: no Postgres, violar a
+`UNIQUE` aborta a **transação inteira** (`SQLState 25P02`), e a consulta de recuperação não podia
+mais rodar.
+
+Evidência (teste real, antes da correção):
+
+```
+retryWithSameKeyInsideCallerTransactionReturnsDuplicate
+  » UncategorizedSQL ... SQL state [25P02];
+    ERROR: current transaction is aborted, commands ignored until end of transaction block
+```
+
+Depois da correção o mesmo teste devolve `DUPLICATE` e a transação do chamador continua
+utilizável.
+
+### Testes que passaram a existir
+
+| Teste | Prova |
+|-------|-------|
+| `retryWithSameKeyInsideCallerTransactionReturnsDuplicate` | `DUPLICATE` dentro da transação do chamador, sem `25P02` |
+| `conflictInsideCallerTransactionCommitsNothing` | conflito marca rollback-only; efeito colateral anterior não commita |
+| `concurrentSameKeyYieldsExactlyOnePostedRepeatedly` | 20 rodadas × 4 threads: 1 `POSTED` + 3 `DUPLICATE` |
+| `concurrentSavesWithSameKeyYieldExactlyOnePostedAndOneDuplicate` | asserta o resultado de cada thread (antes só "sem exceção") |
+| `LedgerTest.concurrentPostsOfSameKeyProduceExactlyOnePosted` | `Ledger` em memória: 50 rodadas × 4 threads, saldo contado uma vez |
+
+## `Ledger` em memória — concorrência corrigida
+
+A limitação registrada em 17/11 ("não é thread-safe", check-then-act sem lock) foi corrigida:
+`register`, `post` e `balanceOf` são `synchronized` no mesmo monitor, e as coleções passaram a
+ser `LinkedHashMap`. Nenhuma regra de domínio mudou.
+
+Antes: 4 threads postando a mesma chave em 200 rodadas → **60 rodadas inconsistentes**
+(`POSTED=4`, saldo 30.000 para um lançamento de 10.000).
+Depois: **0/200**.
+
+## Resultado do build
+
+```
+$ ./mvnw -B verify
+Tests run: 41, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+Distribuição: `LedgerSchemaTest` 8, `JdbcLedgerRepositoryTest` 11,
+`JdbcLedgerRepositoryBalanceTest` 9, `JdbcLedgerRepositoryConcurrencyTest` 2,
+`LedgerTest` 6, `TransactionTest` 4, `LedgerlensApplicationTests` 1.
+
+O número "33 testes" citado acima era o total de 17/11; a soma citada (31) já não fechava.
+
+## Limitações que permanecem (confirmadas em 19/11)
+
+Corrigidas como consequência do item 6: teste de concorrência no nível do banco;
+tradução da duplicidade para `DUPLICATE`; `Ledger` thread-safe.
+
+**Ainda abertas**, e não são regressão — já estavam registradas acima:
+
+1. **Sem API REST** e sem camada `application` (item 7 continua PENDENTE).
+2. **Sem porta/adaptador para `Account`**: não há como criar conta pela aplicação.
+3. **Lançamentos mutáveis no banco**: `UPDATE`/`DELETE` em `entry` são aceitos; não há
+   `REVOKE` nem trigger. A imutabilidade existe só no modelo Java.
+4. **Banco não valida balanceamento nem moeda**: aceita transação desbalanceada e mistura de
+   moedas na mesma transação.
+5. **Bordas do domínio**: overflow de `long` permite transação desbalanceada "fechar"; 
+   `direction = null` é contado como crédito; `Entry.id` repetido não é checado.
+6. **Sem estorno** e sem vínculo com o lançamento original.
+7. **`idempotency_key` global**, sem escopo e sem `CHECK` de tamanho.
+8. **Leitura header + entries em dois statements**, sem transação de leitura.
+9. **`application.yaml` sem datasource**; `springdoc` sem endpoints.
+
+## Documentação
+
+`README-LEDGER-LENS.md` foi removido nesta data: era uma variante antiga do `README.md`
+(afirmava "se um dia existirem adaptadores" quando o adaptador JDBC já existia). O
+`README.md` é o único documento vivo do estado corrente.
