@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.util.Map;
@@ -84,6 +85,21 @@ class JdbcAccountRepositoryTest {
 
     assertThrows(AccountAlreadyExistsException.class, () -> repository.save(duplicate));
     assertEquals(1, rowCount());
+  }
+
+  /**
+   * Colisão de PK não é "conta já existe": {@code (name, currency)} é a regra de negócio,
+   * {@code id} é infraestrutura. Reusar um id com outro nome sobe
+   * {@code DuplicateKeyException} (→ 500), e não {@link AccountAlreadyExistsException} (→ 409),
+   * porque esconder isso como conflito de negócio mascararia um bug de quem gera id.
+   */
+  @Test
+  void primaryKeyCollisionIsNotReportedAsAlreadyExists() {
+    var original = anAccount("Conta Corrente", "BRL", AccountType.ASSET);
+
+    var sameIdOtherName = new Account(original.id(), "Outro Nome", "EUR", AccountType.LIABILITY);
+
+    assertThrows(DuplicateKeyException.class, () -> repository.save(sameIdOtherName));
   }
 
   @Test
