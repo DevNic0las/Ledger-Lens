@@ -1,18 +1,3 @@
 spring:
   application:
     name: ledgerlens
-  datasource:
-    # Padrão de desenvolvimento: um Postgres 17 local. Todo valor é sobrescrevível por
-    # variável de ambiente (SPRING_DATASOURCE_URL e companhia), então produção não depende
-    # deste arquivo.
-    #
-    # A senha em texto é aceitável aqui porque este é um banco descartável de
-    # desenvolvimento, criado pelo docker run documentado no README. Nenhum ambiente real
-    # usa estes valores.
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55432/ll}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:pw}
-  flyway:
-    # O schema é 100% Flyway: a V1 cria account/transaction/entry e a V2 a unicidade de
-    # nome por moeda. Migração roda no boot.
-    enabled: true
