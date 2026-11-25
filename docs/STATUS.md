@@ -470,3 +470,69 @@ tradução da duplicidade para `DUPLICATE`; `Ledger` thread-safe.
 `README-LEDGER-LENS.md` foi removido nesta data: era uma variante antiga do `README.md`
 (afirmava "se um dia existirem adaptadores" quando o adaptador JDBC já existia). O
 `README.md` é o único documento vivo do estado corrente.
+
+---
+
+# Inspeção de 2026-11-25 — etapa 4 concluída (API REST)
+
+A inspeção de 19/11 encerrou com "sem API REST e sem camada `application`". Nesta data as duas
+lacunas foram fechadas: existe `@Service` para cada caso de uso, `@RestController` para cada
+recurso, e a tradução de exceção para status fica num `@RestControllerAdvice`.
+
+## O que passou a existir
+
+| Endpoint | Camadas | Status |
+|----------|---------|--------|
+| `POST /accounts` | `CreateAccountService` → `AccountRepository` (`ON CONFLICT` na `V2`) | `201` + `Location: /accounts/{id}`, `409`, `400` |
+| `GET /accounts` | `AccountQueryService.findAll` → `JdbcAccountRepository.findAll` | `200`, lista vazia é `[]` |
+| `GET /accounts/{id}` | `AccountQueryService.findById` (porta devolve `Optional`) | `200`, `404`, `400` |
+| `GET /accounts/{id}/balance` | `AccountBalanceService.balanceOf` (`OptionalLong`) | `200`, `404`, `400` |
+| `POST /transactions` | `PostTransactionService` → `JdbcLedgerRepository` | `201`, `200`, `409`, `422`, `400` |
+
+Erros seguem RFC 9457 (`application/problem+json`) com `title`/`detail`/`instance`, e
+`AccountsNotFoundException` acrescenta `missingAccountIds`.
+
+## Itens 1, 2 e 7 da inspeção anterior
+
+1. **Sem API REST e sem `application` — resolvido.** `@Transactional` vive nos serviços, não no
+   controller nem no adaptador. `AccountController`, `TransactionController` e
+   `ApiExceptionHandler` em `*/api`; `CreateAccountService`, `AccountQueryService`,
+   `AccountBalanceService`, `PostTransactionService` em `*/application`.
+2. **Sem porta/adaptador para `Account` — resolvido.** `AccountRepository` (domínio) com
+   `save`, `findAllByIds`, `findById`, `findAll`; `JdbcAccountRepository` implementa.
+3. **Sem endpoints de domínio no OpenAPI — resolvido.** `/v3/api-docs` lista os quatro paths.
+
+## O que continua aberto
+
+Os itens 3 a 9 da inspeção de 19/11 seguem abertos, sem regressão: lançamentos mutáveis no
+banco, banco sem validar balanceamento/moeda, bordas de `long`/`null`, ausência de estorno,
+`idempotency_key` global, leitura em dois statements.
+
+**`Entry.id` repetido continua sem validação** — a assimetria com `Transaction.id` não foi
+tratada nesta etapa e permanece como dívida conhecida, não como decisão. Nenhuma data foi
+decidida.
+
+Duas limitações nasceram com a API e estão registradas no `README`:
+
+- `GET /accounts` não pagina: devolve a tabela inteira.
+- Não há `GET /transactions`: transação só é relida pela chave de idempotência.
+- Não há autenticação: qualquer cliente que alcance a porta escreve no razão.
+
+## Resultado do build
+
+```
+$ ./mvnw -B verify
+Tests run: 127, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+Distribuição: `AccountControllerTest` 13, `JdbcLedgerRepositoryTest` 13,
+`JdbcAccountRepositoryTest` 12, `PostTransactionServiceTest` 10, `LedgerSchemaTest` 10,
+`TransactionControllerTest` 9, `JdbcLedgerRepositoryBalanceTest` 9, `LedgerTest` 7,
+`IdempotencyContentTest` 7, `ApiEndToEndTest` 7, `AccountTest` 7, `TransactionTest` 6,
+`CreateAccountCommandTest` 4, `AccountQueryServiceTest` 4, `AccountBalanceServiceTest` 3,
+`AccountBalanceServiceErrorTest` 3, `JdbcLedgerRepositoryConcurrencyTest` 2,
+`LedgerlensApplicationTests` 1.
+
+Além da suíte, um fluxo `curl` de 18 passos foi executado contra o jar e um Postgres 17 reais
+(transcrito no `README`, seção 3): todos os passos responderam o status esperado.
