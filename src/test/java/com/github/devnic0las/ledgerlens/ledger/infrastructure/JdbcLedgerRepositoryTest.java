@@ -159,6 +159,35 @@ class JdbcLedgerRepositoryTest {
             stored.entries().stream().map(Entry::amountCents).toList());
   }
 
+  /**
+   * Descrição faz parte da identidade: mesma chave, mesmos lançamentos, descrição diferente é
+   * conflito — devolver a original em silêncio esconderia um bug do cliente.
+   */
+  @Test
+  void sameIdempotencyKeyWithDifferentDescriptionThrowsConflict() {
+    repository.save(transaction("Pix", "chave-1", 10_000));
+
+    assertThrows(IdempotencyConflictException.class,
+            () -> repository.save(transaction("Pix aluguel", "chave-1", 10_000)));
+
+    assertEquals(1, rowCount("transaction"));
+    assertEquals(2, rowCount("entry"));
+  }
+
+  /** O que continua fora da identidade: `id` e `occurredAt`, gerados a cada tentativa. */
+  @Test
+  void sameKeySameContentWithNewInstantIsStillDuplicate() {
+    repository.save(transaction("Pix", "chave-1", 10_000));
+
+    var retry = new Transaction(UUID.randomUUID(), nowMicros().plusSeconds(60), "Pix", "chave-1",
+            List.of(
+                    new Entry(UUID.randomUUID(), checking, Direction.DEBIT, 10_000),
+                    new Entry(UUID.randomUUID(), revenue, Direction.CREDIT, 10_000)));
+
+    assertEquals(PostResult.DUPLICATE, repository.save(retry));
+    assertEquals(1, rowCount("transaction"));
+  }
+
   @Test
   void primaryKeyCollisionStillPropagatesDuplicateKeyException() {
     var id = UUID.randomUUID();
@@ -250,10 +279,18 @@ class JdbcLedgerRepositoryTest {
   }
 
   private Transaction pix(UUID id, String idempotencyKey, long cents) {
+    return transaction("Pix", id, idempotencyKey, cents);
+  }
+
+  private Transaction transaction(String description, String idempotencyKey, long cents) {
+    return transaction(description, UUID.randomUUID(), idempotencyKey, cents);
+  }
+
+  private Transaction transaction(String description, UUID id, String idempotencyKey, long cents) {
     return new Transaction(
             id,
             nowMicros(),
-            "Pix",
+            description,
             idempotencyKey,
             List.of(
                     new Entry(UUID.randomUUID(), checking, Direction.DEBIT, cents),

@@ -14,8 +14,12 @@ public interface LedgerRepository {
   /**
    * Grava a transação com todos os seus lançamentos de forma atômica.
    *
+   * <p>A identidade da transação, para fins de idempotência, é a descrição mais o multiconjunto
+   * de {@code (conta, direção, valor)}; ver {@link IdempotencyContent}.
+   *
    * @return {@link PostResult#POSTED} quando gravou, {@link PostResult#DUPLICATE} quando
-   *         já existia transação com a mesma {@code idempotencyKey} e nada foi alterado.
+   *         já existia transação com a mesma {@code idempotencyKey} e o mesmo conteúdo, nada
+   *         tendo sido alterado.
    * @throws IdempotencyConflictException quando a chave de idempotência já existe com
    *         conteúdo diferente do recebido.
    *         Se um lançamento falhar, nada é gravado e a exceção de infraestrutura sobe.
