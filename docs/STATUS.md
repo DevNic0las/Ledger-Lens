@@ -457,9 +457,9 @@ tradução da duplicidade para `DUPLICATE`; `Ledger` thread-safe.
    moedas na mesma transação.
 5. **Bordas do domínio**: overflow de `long` permite transação desbalanceada "fechar"; 
    `direction = null` é contado como crédito; `Entry.id` repetido não é checado.
-   *(Backlog, decidido em 25/11/2026: `Entry.id` fica como está — sem validação de nulidade
-   nem de duplicidade. `Transaction.id` foi validado no PR da idempotência (`0983b3e`); a
-   assimetria é intencional e este item segue aberto até uma decisão explícita.)*
+   *(Dívida conhecida a resolver, não decisão permanente: `Entry.id` segue sem validação de
+   nulidade nem de duplicidade, enquanto `Transaction.id` já é validado (`0983b3e`). A
+   assimetria deve ser eliminada; nenhuma data foi decidida.)*
 6. **Sem estorno** e sem vínculo com o lançamento original.
 7. **`idempotency_key` global**, sem escopo e sem `CHECK` de tamanho.
 8. **Leitura header + entries em dois statements**, sem transação de leitura.

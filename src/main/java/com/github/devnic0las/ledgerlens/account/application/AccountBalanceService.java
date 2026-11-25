@@ -11,9 +11,9 @@ import java.util.UUID;
  * Leitura de saldo. O saldo continua sendo derivado dos lançamentos no banco, nunca lido de
  * coluna.
  *
- * <p>O adaptador sinaliza conta inexistente com {@link IllegalArgumentException}, o mesmo tipo
- * que outras falhas usam. Traduzir para {@link AccountNotFoundException} aqui é o que permite à
- * borda responder 404 sem adivinhar a intenção pelo tipo de exceção.
+ * <p>A porta devolve {@link java.util.OptionalLong}, então "conta não existe" é ausência
+ * explícita: o serviço não precisa adivinhar a intenção pelo tipo de exceção, e uma falha de
+ * infraestrutura nunca é confundida com 404.
  */
 @Service
 public class AccountBalanceService {
@@ -30,10 +30,7 @@ public class AccountBalanceService {
    */
   @Transactional(readOnly = true)
   public long balanceOf(UUID accountId) {
-    try {
-      return ledgerRepository.balanceOf(accountId);
-    } catch (IllegalArgumentException exception) {
-      throw new AccountNotFoundException(accountId);
-    }
+    return ledgerRepository.balanceOf(accountId)
+            .orElseThrow(() -> new AccountNotFoundException(accountId));
   }
 }

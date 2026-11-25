@@ -6,8 +6,10 @@ package com.github.devnic0las.ledgerlens.account.domain.exception;
  * que trata contas citadas numa transação: aqui é um único recurso lido diretamente pela URL,
  * logo a resposta é 404.
  *
- * <p>Existe para que a borda não dependa de um {@link IllegalArgumentException} ambíguo: o
- * {@code balanceOf} também o lança por outros motivos, e um 422 no lugar de 404 seria mentira.
+ * <p>É lançada pelo serviço de saldo quando a porta devolve
+ * {@link java.util.OptionalLong#empty()}. Nunca nasce de {@code IllegalArgumentException}:
+ * ausência de conta é um valor explícito, e uma falha de infraestrutura precisa subir como
+ * 500 em vez de ser reportada como 404.
  */
 public class AccountNotFoundException extends RuntimeException {
 
