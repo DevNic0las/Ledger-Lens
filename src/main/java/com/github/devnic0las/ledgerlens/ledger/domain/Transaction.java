@@ -9,6 +9,9 @@ public record Transaction(UUID id, Instant occurredAt, String description,
 
 
   public Transaction {
+    if (id == null) {
+      throw new NullPointerException("Transaction id is required");
+    }
     if(entries.size() < 2 ) {
       throw new IllegalArgumentException("Transaction must have at least two entries");
     }
