@@ -38,8 +38,13 @@ public interface LedgerRepository {
    * <p>Pode ser negativo: crédito maior que débito numa conta de ativo é um saldo
    * devedor/credor invertido, e o ledger não esconde isso.
    *
-   * @throws IllegalArgumentException se a conta não existir. Conta existente sem
-   *         lançamentos devolve {@code 0}, que é diferente de conta inexistente.
+   * <p>Devolve {@link java.util.OptionalLong#empty()} quando a conta não existe, em vez de
+   * lançar. Assim "não existe" é um valor explícito, e não um
+   * {@link IllegalArgumentException} que qualquer falha técnica também usaria — o chamador
+   * consegue distinguir ausência de bug.
+   *
+   * <p>Conta existente sem lançamentos devolve {@code OptionalLong.of(0)}, que é diferente de
+   * conta inexistente.
    */
-  long balanceOf(UUID accountId);
+  java.util.OptionalLong balanceOf(UUID accountId);
 }

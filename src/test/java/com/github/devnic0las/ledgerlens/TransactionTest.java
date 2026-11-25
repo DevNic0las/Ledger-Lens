@@ -3,6 +3,8 @@ package com.github.devnic0las.ledgerlens;
 import com.github.devnic0las.ledgerlens.ledger.domain.Direction;
 import com.github.devnic0las.ledgerlens.ledger.domain.Entry;
 import com.github.devnic0las.ledgerlens.ledger.domain.Transaction;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.InvalidEntryException;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.InvalidTransactionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +13,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 
@@ -35,10 +38,12 @@ public class TransactionTest   {
 
   @Test
   void shouldRejectTransactionUnbalanced() {
-    assertThrows(IllegalArgumentException.class, () ->
+    var exception = assertThrows(InvalidTransactionException.class, () ->
             pix("chave-1", 10_000, 9_000)
     );
-
+    // A exceção é específica para que a borda HTTP não precise mapear todo
+    // IllegalArgumentException (o que esconderia bug de programação).
+    assertEquals("Transaction is unbalanced", exception.getMessage());
   }
 
   @Test
@@ -50,15 +55,22 @@ public class TransactionTest   {
   void shouldRejectEmptyTransaction() {
     var entries = List.<Entry>of();
 
-    assertThrows(IllegalArgumentException.class, () ->
+    assertThrows(InvalidTransactionException.class, () ->
             new Transaction(UUID.randomUUID(), Instant.now(), "Pix", "chave-1", entries)
     );
   }
 
   @Test
   void shouldRejectZeroAmount() {
-    assertThrows(IllegalArgumentException.class, () ->
+    assertThrows(InvalidEntryException.class, () ->
             new Entry(UUID.randomUUID(), UUID.randomUUID(), Direction.DEBIT, 0)
+    );
+  }
+
+  @Test
+  void shouldRejectNegativeAmount() {
+    assertThrows(InvalidEntryException.class, () ->
+            new Entry(UUID.randomUUID(), UUID.randomUUID(), Direction.CREDIT, -1)
     );
   }
 

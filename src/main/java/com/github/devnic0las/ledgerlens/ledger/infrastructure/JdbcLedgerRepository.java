@@ -19,6 +19,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 /**
@@ -107,7 +108,7 @@ public class JdbcLedgerRepository implements LedgerRepository {
    * vigiada pelo teste que compara os dois cálculos nos cinco tipos de conta.
    */
   @Override
-  public long balanceOf(UUID accountId) {
+  public OptionalLong balanceOf(UUID accountId) {
     return jdbc.sql("""
                     SELECT COALESCE(SUM(
                                CASE
@@ -124,7 +125,8 @@ public class JdbcLedgerRepository implements LedgerRepository {
             .param("accountId", accountId)
             .query(Long.class)
             .optional()
-            .orElseThrow(() -> new IllegalArgumentException("Account not found: " + accountId));
+            .map(OptionalLong::of)
+            .orElseGet(OptionalLong::empty);
   }
 
   private void insertEntries(Transaction transaction) {

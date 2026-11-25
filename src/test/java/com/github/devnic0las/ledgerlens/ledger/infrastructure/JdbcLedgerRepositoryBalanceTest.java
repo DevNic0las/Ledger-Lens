@@ -24,7 +24,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest
 @Import(TestcontainersConfiguration.class)
@@ -62,7 +62,7 @@ class JdbcLedgerRepositoryBalanceTest {
     post(target, Direction.DEBIT, debitCents, counterpart);
     post(target, Direction.CREDIT, creditCents, counterpart);
 
-    assertEquals(expectedCents, repository.balanceOf(target));
+    assertEquals(expectedCents, repository.balanceOf(target).orElseThrow());
   }
 
   @Test
@@ -73,19 +73,20 @@ class JdbcLedgerRepositoryBalanceTest {
     post(checking, Direction.DEBIT, 2_000, counterpart);
     post(checking, Direction.CREDIT, 5_000, counterpart);
 
-    assertEquals(-3_000, repository.balanceOf(checking));
+    assertEquals(-3_000, repository.balanceOf(checking).orElseThrow());
   }
 
   @Test
   void accountWithoutEntriesHasZeroBalance() {
     var untouched = anAccount("Conta sem lançamentos", "REVENUE");
 
-    assertEquals(0, repository.balanceOf(untouched));
+    assertEquals(0, repository.balanceOf(untouched).orElseThrow());
   }
 
   @Test
-  void unknownAccountThrows() {
-    assertThrows(IllegalArgumentException.class, () -> repository.balanceOf(UUID.randomUUID()));
+  void unknownAccountIsEmpty() {
+    assertTrue(repository.balanceOf(UUID.randomUUID()).isEmpty(),
+            "conta inexistente é ausência explícita, não exceção");
   }
 
   /**
@@ -123,7 +124,7 @@ class JdbcLedgerRepositoryBalanceTest {
     for (Account account : accounts) {
       assertEquals(
               ledger.balanceOf(account.id()),
-              repository.balanceOf(account.id()),
+              repository.balanceOf(account.id()).orElseThrow(),
               "saldo divergiu na conta " + account.name() + " (" + account.type() + ")");
     }
   }
