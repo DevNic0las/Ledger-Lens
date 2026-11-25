@@ -1,17 +1,18 @@
 package com.github.devnic0las.ledgerlens.ledger.api;
 
+import com.github.devnic0las.ledgerlens.account.domain.exception.AccountNotFoundException;
 import com.github.devnic0las.ledgerlens.ledger.domain.exception.AccountsNotFoundException;
 import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
-import org.springframework.http.HttpHeaders;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.InvalidEntryException;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.InvalidTransactionException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
-import org.springframework.http.converter.HttpMessageNotReadableException;
-import org.springframework.web.bind.MissingRequestHeaderException;
 
 /**
  * Tradução de exceção para HTTP, no formato RFC 9457 ({@code application/problem+json}).
@@ -21,30 +22,46 @@ import org.springframework.web.bind.MissingRequestHeaderException;
  *   <li><b>400</b> — pedido não interpretável: JSON inválido, campo obrigatório ausente,
  *       header ausente, valor que não converte.</li>
  *   <li><b>422</b> — pedido interpretável que viola regra de negócio: desbalanceado, menos de
- *       dois lançamentos, conta inexistente.</li>
+ *       dois lançamentos, valor não positivo, conta inexistente citada na transação.</li>
  *   <li><b>409</b> — pedido válido que conflita com estado existente: chave de idempotência
  *       reutilizada com outro conteúdo, conta com nome e moeda já existentes.</li>
  *   <li><b>404</b> — recurso lido não existe.</li>
- *   <li><b>500</b> — bug: colisão de PK, estado impossível.</li>
+ *   <li><b>500</b> — bug: colisão de PK, estado impossível, {@code IllegalArgumentException}
+ *       genérico.</li>
  * </ul>
+ *
+ * <p>Não existe handler para {@link IllegalArgumentException} genérico de propósito: mapeá-lo
+ * para 422 transformaria bug de programação em "o pedido do cliente está errado". Só as
+ * exceções de negócio nomeadas recebem 422.
  */
 @RestControllerAdvice
 class ApiExceptionHandler {
 
-  /** Regra contábil violada no construtor do domínio. */
-  @ExceptionHandler(IllegalArgumentException.class)
-  ProblemDetail businessRuleViolated(IllegalArgumentException exception) {
-    var problem = problem(HttpStatus.UNPROCESSABLE_ENTITY, "Business rule violated", exception.getMessage());
-    return problem;
+  /** Transação que não fecha (menos de dois lançamentos, débitos ≠ créditos). */
+  @ExceptionHandler(InvalidTransactionException.class)
+  ProblemDetail invalidTransaction(InvalidTransactionException exception) {
+    return problem(HttpStatus.UNPROCESSABLE_ENTITY, "Business rule violated", exception.getMessage());
   }
 
-  /** Lista exatamente os ids que faltam, para que o cliente saiba o que corrigir. */
+  /** Lançamento com valor não positivo. */
+  @ExceptionHandler(InvalidEntryException.class)
+  ProblemDetail invalidEntry(InvalidEntryException exception) {
+    return problem(HttpStatus.UNPROCESSABLE_ENTITY, "Business rule violated", exception.getMessage());
+  }
+
+  /** Conta citada numa transação que não existe. Lista exatamente os ids que faltam. */
   @ExceptionHandler(AccountsNotFoundException.class)
   ProblemDetail accountsNotFound(AccountsNotFoundException exception) {
     var problem = problem(HttpStatus.UNPROCESSABLE_ENTITY, "Accounts not found",
             "Some accounts referenced by the transaction do not exist");
     problem.setProperty("missingAccountIds", exception.missingAccountIds());
     return problem;
+  }
+
+  /** Leitura de conta que não existe: o recurso pedido pela URL não está lá. */
+  @ExceptionHandler(AccountNotFoundException.class)
+  ProblemDetail accountNotFound(AccountNotFoundException exception) {
+    return problem(HttpStatus.NOT_FOUND, "Account not found", exception.getMessage());
   }
 
   @ExceptionHandler(IdempotencyConflictException.class)

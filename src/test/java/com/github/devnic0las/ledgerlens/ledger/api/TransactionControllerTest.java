@@ -3,6 +3,8 @@ package com.github.devnic0las.ledgerlens.ledger.api;
 import com.github.devnic0las.ledgerlens.ledger.application.PostTransactionService;
 import com.github.devnic0las.ledgerlens.ledger.domain.exception.AccountsNotFoundException;
 import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
+import com.github.devnic0las.ledgerlens.ledger.domain.exception.InvalidTransactionException;
+import jakarta.servlet.ServletException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -13,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.Set;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -77,7 +80,7 @@ class TransactionControllerTest {
   /** Regra contábil violada é pedido interpretável: 422, não 400. */
   @Test
   void unbalancedTransactionBecomes422() throws Exception {
-    when(service.post(any())).thenThrow(new IllegalArgumentException("Transaction is unbalanced"));
+    when(service.post(any())).thenThrow(new InvalidTransactionException("Transaction is unbalanced"));
 
     mvc.perform(post("/transactions")
                     .header("Idempotency-Key", IDEMPOTENCY_KEY)
@@ -86,6 +89,29 @@ class TransactionControllerTest {
             .andExpect(status().isUnprocessableEntity())
             .andExpect(jsonPath("$.status").value(422))
             .andExpect(jsonPath("$.title").value("Business rule violated"));
+  }
+
+  /**
+   * Prova que o mapeamento não é amplo: um {@code IllegalArgumentException} que não é de
+   * negócio é bug de programação e não pode virar 422 — isso mentiria para o cliente dizendo
+   * que o pedido dele estava errado.
+   *
+   * <p>Aqui a exceção propaga pelo MockMvc, que não faz error dispatch; num servidor real ela
+   * vira 500 pelo tratamento padrão. O que este teste fixa é a ausência do mapeamento amplo,
+   * não o formato do 500.
+   *
+   * <p>Não há {@code @ExceptionHandler(Exception.class)} de propósito: ele capturaria também
+   * {@code NoResourceFoundException} e transformaria "rota não existe" (404) em 500.
+   */
+  @Test
+  void genericIllegalArgumentIsNotTranslatedInto422() {
+    when(service.post(any())).thenThrow(new IllegalArgumentException("bug de programação qualquer"));
+
+    assertThrows(ServletException.class, () ->
+            mvc.perform(post("/transactions")
+                    .header("Idempotency-Key", IDEMPOTENCY_KEY)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(BODY)));
   }
 
   /** Sem chave não há como deduplicar: o pedido nem chega ao serviço. */
