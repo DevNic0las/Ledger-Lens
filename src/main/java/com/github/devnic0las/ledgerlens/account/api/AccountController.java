@@ -1,6 +1,7 @@
 package com.github.devnic0las.ledgerlens.account.api;
 
 import com.github.devnic0las.ledgerlens.account.application.AccountBalanceService;
+import com.github.devnic0las.ledgerlens.account.application.AccountQueryService;
 import com.github.devnic0las.ledgerlens.account.application.CreateAccountCommand;
 import com.github.devnic0las.ledgerlens.account.application.CreateAccountService;
 import com.github.devnic0las.ledgerlens.account.domain.Account;
@@ -18,30 +19,35 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.net.URI;
+import java.util.List;
 import java.util.UUID;
 
 /**
- * {@code POST /accounts}: cria uma conta e devolve {@code 201} com o id gerado pelo servidor.
+ * Contas: criação e leitura.
  *
  * <ul>
- *   <li>{@code 201} — criada. O {@code Location} aponta para {@code /accounts/{id}}.</li>
- *   <li>{@code 409} — já existe conta com o mesmo {@code (name, currency)}. O conflito vem da
- *       constraint {@code account_name_currency_key}, não de uma pré-consulta.</li>
- *   <li>{@code 400} — corpo inválido: campo ausente ou em branco, {@code currency} fora de
- *       três maiúsculas (ISO 4217), {@code type} desconhecido.</li>
+ *   <li>{@code POST /accounts} — {@code 201} com o id gerado e {@code Location} em
+ *       {@code /accounts/{id}}; {@code 409} se {@code (name, currency)} já existir;
+ *       {@code 400} para corpo inválido.</li>
+ *   <li>{@code GET /accounts} — {@code 200} com a lista; lista vazia é {@code []}, não 404.</li>
+ *   <li>{@code GET /accounts/{id}} — {@code 200}, {@code 404} se não existir, {@code 400} se o
+ *       id da URL não for UUID.</li>
+ *   <li>{@code GET /accounts/{id}/balance} — saldo derivado, em centavos. Mesmos status.</li>
  * </ul>
- *
- * <p>O pedido não traz {@code id}: o servidor gera, então o cliente não colide com PK.
  */
 @RestController
 @RequestMapping("/accounts")
 class AccountController {
 
   private final AccountBalanceService balanceService;
+  private final AccountQueryService queryService;
   private final CreateAccountService createService;
 
-  AccountController(AccountBalanceService balanceService, CreateAccountService createService) {
+  AccountController(AccountBalanceService balanceService,
+                    AccountQueryService queryService,
+                    CreateAccountService createService) {
     this.balanceService = balanceService;
+    this.queryService = queryService;
     this.createService = createService;
   }
 
@@ -54,6 +60,16 @@ class AccountController {
             .body(AccountResponse.of(account));
   }
 
+  @GetMapping
+  ResponseEntity<List<AccountResponse>> list() {
+    return ResponseEntity.ok(queryService.findAll().stream().map(AccountResponse::of).toList());
+  }
+
+  @GetMapping("/{id}")
+  ResponseEntity<AccountResponse> byId(@PathVariable UUID id) {
+    return ResponseEntity.ok(AccountResponse.of(queryService.findById(id)));
+  }
+
   @GetMapping("/{id}/balance")
   ResponseEntity<BalanceResponse> balance(@PathVariable UUID id) {
     return ResponseEntity.ok(new BalanceResponse(id, balanceService.balanceOf(id)));
@@ -61,13 +77,12 @@ class AccountController {
 
   /**
    * Corpo de criação. {@code currency} é validado na forma ({@code [A-Z]{3}}) e {@code type}
-   * como enum: pedido malformado responde 400 antes de qualquer escrita, e não depende de uma
-   * exceção do domínio.
+   * como enum: pedido malformado responde 400 antes de qualquer escrita.
    */
   record CreateAccountRequest(@NotBlank String name,
-                            @NotBlank @Pattern(regexp = "[A-Z]{3}",
-                                    message = "must be three upper-case letters (ISO 4217)") String currency,
-                            @NotNull AccountType type) {
+                              @NotBlank @Pattern(regexp = "[A-Z]{3}",
+                                      message = "must be three upper-case letters (ISO 4217)") String currency,
+                              @NotNull AccountType type) {
 
     CreateAccountCommand toCommand() {
       return new CreateAccountCommand(name, currency, type);

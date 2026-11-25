@@ -127,6 +127,41 @@ class JdbcAccountRepositoryTest {
     assertEquals(2, found.size());
   }
 
+  @Test
+  void findsOneAccountById() {
+    var account = anAccount("Conta Corrente", "BRL", AccountType.ASSET);
+    anAccount("Conta Receita", "BRL", AccountType.REVENUE);
+
+    var found = repository.findById(account.id());
+
+    assertTrue(found.isPresent());
+    assertEquals(account, found.get());
+  }
+
+  @Test
+  void answersAbsentForUnknownId() {
+    anAccount("Conta Corrente", "BRL", AccountType.ASSET);
+
+    assertTrue(repository.findById(UUID.randomUUID()).isEmpty());
+  }
+
+  @Test
+  void listsEveryAccount() {
+    var checking = anAccount("Conta Corrente", "BRL", AccountType.ASSET);
+    var revenue = anAccount("Conta Receita", "USD", AccountType.REVENUE);
+    var cash = anAccount("Caixa", "BRL", AccountType.EXPENSE);
+
+    var all = repository.findAll();
+
+    assertEquals(3, all.size());
+    assertTrue(all.containsAll(java.util.List.of(checking, revenue, cash)));
+  }
+
+  @Test
+  void listsEmptyWhenNoAccountExists() {
+    assertTrue(repository.findAll().isEmpty());
+  }
+
   private Account anAccount(String name, String currency, AccountType type) {
     var account = new Account(UUID.randomUUID(), name, currency, type);
     repository.save(account);
