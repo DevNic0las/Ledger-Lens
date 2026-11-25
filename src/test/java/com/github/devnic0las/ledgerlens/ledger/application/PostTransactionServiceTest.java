@@ -100,6 +100,27 @@ class PostTransactionServiceTest {
   }
 
   /**
+   * Mesma chave, mesmos lançamentos, descrição diferente: o cliente reenviou outro pedido com
+   * uma chave que deveria ser exclusiva. Devolver 200 com a original mentiria para ele.
+   */
+  @Test
+  void sameKeyWithDifferentDescriptionThrowsAndKeepsTheOriginal() {
+    var first = service.post(new PostTransactionCommand("Pix aluguel", "chave-1", List.of(
+            new PostTransactionCommand.RequestedEntry(checking.id(), Direction.DEBIT, 10_000),
+            new PostTransactionCommand.RequestedEntry(revenue.id(), Direction.CREDIT, 10_000))));
+
+    assertThrows(IdempotencyConflictException.class, () ->
+            service.post(new PostTransactionCommand("Pix mercado", "chave-1", List.of(
+                    new PostTransactionCommand.RequestedEntry(checking.id(), Direction.DEBIT, 10_000),
+                    new PostTransactionCommand.RequestedEntry(revenue.id(), Direction.CREDIT, 10_000)))));
+
+    assertEquals(1, rowCount("transaction"));
+    var stored = ledgerRepository.findByIdempotencyKey("chave-1").orElseThrow();
+    assertEquals(first.transaction().id(), stored.id());
+    assertEquals("Pix aluguel", stored.description());
+  }
+
+  /**
    * O serviço valida as contas antes do {@code save}: sem isso quem estoura é a FK, como
    * {@code DataIntegrityViolationException}, e a API não teria como listar quais ids faltam.
    */

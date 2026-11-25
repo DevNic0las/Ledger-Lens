@@ -34,11 +34,15 @@ public class LedgerTest {
   }
 
   private Transaction pix(String idempotencyKey, long cents) {
+    return transaction("Pix", idempotencyKey, cents);
+  }
+
+  private Transaction transaction(String description, String idempotencyKey, long cents) {
     var entries = List.of(
             new Entry(UUID.randomUUID(), checking.id(), Direction.DEBIT, cents),
             new Entry(UUID.randomUUID(), revenue.id(), Direction.CREDIT, cents)
     );
-    return new Transaction(UUID.randomUUID(), Instant.now(), "Pix", idempotencyKey, entries);
+    return new Transaction(UUID.randomUUID(), Instant.now(), description, idempotencyKey, entries);
   }
 
   @Test
@@ -98,6 +102,17 @@ public class LedgerTest {
     ledger.register(revenue);
     ledger.post(pix("chave-1", 10_000));
     assertThrows(IdempotencyConflictException.class, () -> ledger.post(pix("chave-1", 99_999)));
+  }
+
+  /** Mesma chave, mesmos lançamentos, descrição diferente: conflito, não `DUPLICATE` silencioso. */
+  @Test
+  void sameKeyWithDifferentDescriptionThrows() {
+    ledger.register(checking);
+    ledger.register(revenue);
+    ledger.post(transaction("Pix aluguel", "chave-1", 10_000));
+
+    assertThrows(IdempotencyConflictException.class,
+            () -> ledger.post(transaction("Pix mercado", "chave-1", 10_000)));
   }
 
   /**

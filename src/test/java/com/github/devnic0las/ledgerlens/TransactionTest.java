@@ -62,4 +62,20 @@ public class TransactionTest   {
     );
   }
 
+  /**
+   * Defesa em profundidade: um adaptador futuro não pode construir transação sem identidade.
+   * O caminho atual nunca passa null — o serviço gera o id e a leitura do banco o traz de uma
+   * coluna {@code UUID PRIMARY KEY} (logo {@code NOT NULL}).
+   */
+  @Test
+  void shouldRejectNullId() {
+    var entries = List.of(
+            new Entry(UUID.randomUUID(), checkingAccountId, Direction.DEBIT, 100),
+            new Entry(UUID.randomUUID(), revenueAccountId, Direction.CREDIT, 100));
+
+    assertThrows(NullPointerException.class, () ->
+            new Transaction(null, Instant.now(), "Pix", "chave-1", entries)
+    );
+  }
+
 }
