@@ -51,47 +51,66 @@ Pré-requisitos reais do que existe hoje:
 ./mvnw -B verify
 ```
 
-Resultado nesta inspeção: **41 testes, 0 falhas, `BUILD SUCCESS`**.
+Resultado nesta inspeção: **102 testes, 0 falhas, `BUILD SUCCESS`**.
 
 | Classe | Testes | O que prova |
 |--------|-------:|-------------|
-| `LedgerSchemaTest` | 8 | Constraints do schema (SQLState) |
-| `JdbcLedgerRepositoryTest` | 11 | Gravação, leitura, idempotência, rollback, retry em transação do chamador |
+| `LedgerSchemaTest` | 10 | Constraints do schema (SQLState) |
+| `JdbcLedgerRepositoryTest` | 13 | Gravação, leitura, idempotência, rollback, retry em transação do chamador |
 | `JdbcLedgerRepositoryBalanceTest` | 9 | Saldo em SQL e paridade com o domínio nos 5 tipos de conta |
 | `JdbcLedgerRepositoryConcurrencyTest` | 2 | Duas threads na mesma chave: 1 `POSTED` + 1 `DUPLICATE` |
-| `LedgerTest` | 6 | Regras em memória, incluindo concorrência |
-| `TransactionTest` | 4 | Invariantes de `Transaction`/`Entry` |
+| `JdbcAccountRepositoryTest` | 7 | Round-trip de conta, `IN (:ids)`, unicidade `(name, currency)`, PK ≠ regra de negócio |
+| `PostTransactionServiceTest` | 10 | Caso de uso: validação de contas, `POSTED`/`DUPLICATE`, conflito, atomicidade |
+| `AccountBalanceServiceTest` | 3 | Saldo pela aplicação e 404 na conta inexistente |
+| `AccountBalanceServiceErrorTest` | 3 | Falha de infraestrutura propaga e não vira 404 |
+| `TransactionControllerTest` | 9 | Tradução de exceção para 201/200/409/422/400 |
+| `AccountControllerTest` | 3 | `GET /accounts/{id}/balance`: 200, 404, 400 |
+| `ApiEndToEndTest` | 5 | Servidor + Postgres reais: idempotência, 409, 422, 400, 404 pela API |
+| `IdempotencyContentTest` | 7 | Identidade da idempotência (descrição + multiconjunto de lançamentos) |
+| `AccountTest` | 7 | Invariantes de `Account` |
+| `LedgerTest` | 7 | Regras em memória, incluindo concorrência |
+| `TransactionTest` | 6 | Invariantes de `Transaction`/`Entry` |
 | `LedgerlensApplicationTests` | 1 | Contexto sobe com o schema migrado |
 
 ### Rodar a aplicação
 
-`src/main/resources/application.yaml` **não** define datasource, então `java -jar` sozinho
-falha com `Failed to configure a DataSource: 'url' attribute is not specified`. É preciso
-apontar para um Postgres:
+`src/main/resources/application.yaml` aponta para um Postgres 17 local em `localhost:55432`
+(banco `ll`, usuário `postgres`, senha `pw`) e todo valor é sobrescrevível por variável de
+ambiente, então `java -jar` sobe sozinho depois que o banco existe. O Flyway aplica `V1` e
+`V2` no boot.
 
 ```bash
-# 1) suba um Postgres 17 (o Flyway aplica V1 sozinho no boot)
+# 1) suba um Postgres 17 na porta que o application.yaml assume
 docker run -d --rm --name ll-pg -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=ll -p 55432:5432 postgres:17
 
-# 2) empacote e suba a aplicação apontando para ele
+# 2) empacote e suba — sem variáveis de ambiente
 ./mvnw -B -DskipTests package
-SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:55432/ll \
-SPRING_DATASOURCE_USERNAME=postgres \
-SPRING_DATASOURCE_PASSWORD=pw \
 java -jar target/ledgerlens-0.0.1-SNAPSHOT.jar
 ```
 
-A aplicação sobe em `http://localhost:8080`. O que responde hoje:
+Para apontar para outro banco, use as variáveis usuais:
 
-| Endpoint | Resposta |
-|----------|----------|
-| `GET /actuator/health` | `{"status":"UP"}` |
-| `GET /v3/api-docs` | `200`, com `"paths": {}` |
-| `GET /swagger-ui.html` | `302` |
-| `/api/accounts`, `/api/transactions` | `404` (não existem) |
+```bash
+SPRING_DATASOURCE_URL=jdbc:postgresql://outro-host:5432/db \
+SPRING_DATASOURCE_USERNAME=user \
+SPRING_DATASOURCE_PASSWORD=secret \
+java -jar target/ledgerlens-0.0.1-SNAPSHOT.jar
+```
 
-**Não há API de domínio.** O caminho de escrita existe e funciona, mas só é exercitado pelos
-testes de integração: nenhum `@Service` e nenhum `@RestController` chamam a porta.
+A aplicação sobe em `http://localhost:8080`. Endpoints da etapa 4:
+
+| Endpoint | Respostas |
+|----------|-----------|
+| `POST /transactions` | `201` gravado · `200` duplicata (devolve a original) · `409` chave com conteúdo diferente · `422` regra violada (desbalanceada, conta inexistente, valor ≤ 0) · `400` pedido malformado ou sem `Idempotency-Key` |
+| `GET /accounts/{id}/balance` | `200` com `balanceCents` · `404` conta inexistente · `400` id que não é UUID |
+| `GET /actuator/health` | `200 {"status":"UP"}` |
+| `GET /v3/api-docs` | `200`, agora com os paths reais |
+
+Erros usam RFC 9457 (`application/problem+json`).
+
+**Não há `POST /accounts`.** A criação de conta existe na porta e no adaptador
+(`AccountRepository`, com `UNIQUE (name, currency)` na `V2`), mas ainda não tem endpoint: hoje
+as contas só nascem pelo caso de uso interno ou por SQL. É a lacuna que resta da etapa 4.
 
 ## 4. Estrutura de packages
 
