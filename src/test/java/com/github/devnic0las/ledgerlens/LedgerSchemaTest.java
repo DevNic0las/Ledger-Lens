@@ -119,6 +119,26 @@ class LedgerSchemaTest {
             UUID.randomUUID(), UUID.randomUUID(), checking, "DEBIT", 100L));
   }
 
+  /** Unicidade de negócio da conta: {@code (name, currency)}. Moeda diferente não colide. */
+  @Test
+  void accountNameMustBeUniquePerCurrency() throws SQLException {
+    anAccount("Caixa", "ASSET");
+
+    assertEquals(UNIQUE_VIOLATION, sqlStateOf(
+            "INSERT INTO account (id, name, type, currency) VALUES (?, ?, ?, ?)",
+            UUID.randomUUID(), "Caixa", "LIABILITY", "BRL"));
+  }
+
+  @Test
+  void accountNameMayRepeatInAnotherCurrency() throws SQLException {
+    anAccount("Caixa", "ASSET");
+
+    execute("INSERT INTO account (id, name, type, currency) VALUES (?, ?, ?, ?)",
+            UUID.randomUUID(), "Caixa", "ASSET", "USD");
+
+    assertEquals(2, count("SELECT count(*) FROM account"));
+  }
+
   @Test
   void idempotencyKeyMustBeUnique() throws SQLException {
     aTransaction("chave-1");
