@@ -59,13 +59,14 @@ Resultado nesta inspeção: **102 testes, 0 falhas, `BUILD SUCCESS`**.
 | `JdbcLedgerRepositoryTest` | 13 | Gravação, leitura, idempotência, rollback, retry em transação do chamador |
 | `JdbcLedgerRepositoryBalanceTest` | 9 | Saldo em SQL e paridade com o domínio nos 5 tipos de conta |
 | `JdbcLedgerRepositoryConcurrencyTest` | 2 | Duas threads na mesma chave: 1 `POSTED` + 1 `DUPLICATE` |
-| `JdbcAccountRepositoryTest` | 7 | Round-trip de conta, `IN (:ids)`, unicidade `(name, currency)`, PK ≠ regra de negócio |
+| `JdbcAccountRepositoryTest` | 8 | Round-trip de conta, `IN (:ids)`, unicidade `(name, currency)`, PK ≠ regra de negócio |
 | `PostTransactionServiceTest` | 10 | Caso de uso: validação de contas, `POSTED`/`DUPLICATE`, conflito, atomicidade |
 | `AccountBalanceServiceTest` | 3 | Saldo pela aplicação e 404 na conta inexistente |
 | `AccountBalanceServiceErrorTest` | 3 | Falha de infraestrutura propaga e não vira 404 |
 | `TransactionControllerTest` | 9 | Tradução de exceção para 201/200/409/422/400 |
-| `AccountControllerTest` | 3 | `GET /accounts/{id}/balance`: 200, 404, 400 |
-| `ApiEndToEndTest` | 5 | Servidor + Postgres reais: idempotência, 409, 422, 400, 404 pela API |
+| `AccountControllerTest` | 8 | `POST /accounts` (201/409/400) e `GET /accounts/{id}/balance` (200/404/400) |
+| `ApiEndToEndTest` | 7 | Servidor + Postgres reais: criação de conta, idempotência, 409, 422, 400, 404 |
+| `CreateAccountCommandTest` | 6 | Id gerado no servidor, campos obrigatórios, formato delegado ao domínio |
 | `IdempotencyContentTest` | 7 | Identidade da idempotência (descrição + multiconjunto de lançamentos) |
 | `AccountTest` | 7 | Invariantes de `Account` |
 | `LedgerTest` | 7 | Regras em memória, incluindo concorrência |
@@ -101,16 +102,18 @@ A aplicação sobe em `http://localhost:8080`. Endpoints da etapa 4:
 
 | Endpoint | Respostas |
 |----------|-----------|
-| `POST /transactions` | `201` gravado · `200` duplicata (devolve a original) · `409` chave com conteúdo diferente · `422` regra violada (desbalanceada, conta inexistente, valor ≤ 0) · `400` pedido malformado ou sem `Idempotency-Key` |
+| `POST /accounts` | `201` criada (devolve o `id` gerado e `Location`) · `409` já existe `(name, currency)` · `400` corpo inválido (campo ausente, moeda fora de `[A-Z]{3}`, `type` desconhecido) |
 | `GET /accounts/{id}/balance` | `200` com `balanceCents` · `404` conta inexistente · `400` id que não é UUID |
+| `POST /transactions` | `201` gravado · `200` duplicata (devolve a original) · `409` chave com conteúdo diferente · `422` regra violada (desbalanceada, conta inexistente, valor ≤ 0) · `400` pedido malformado ou sem `Idempotency-Key` |
 | `GET /actuator/health` | `200 {"status":"UP"}` |
 | `GET /v3/api-docs` | `200`, agora com os paths reais |
 
 Erros usam RFC 9457 (`application/problem+json`).
 
-**Não há `POST /accounts`.** A criação de conta existe na porta e no adaptador
-(`AccountRepository`, com `UNIQUE (name, currency)` na `V2`), mas ainda não tem endpoint: hoje
-as contas só nascem pelo caso de uso interno ou por SQL. É a lacuna que resta da etapa 4.
+O `POST /accounts` não aceita `id` no corpo: o servidor gera, então o cliente não colide com
+PK. O conflito de nome é decidido pela constraint `account_name_currency_key` (migration `V2`),
+via `ON CONFLICT (name, currency) DO NOTHING`, e traduzido para
+`AccountAlreadyExistsException` → `409`.
 
 ## 4. Estrutura de packages
 

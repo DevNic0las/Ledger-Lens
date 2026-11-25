@@ -87,6 +87,21 @@ class JdbcAccountRepositoryTest {
     assertEquals(1, rowCount());
   }
 
+  /** O `ON CONFLICT` nomeia `(name, currency)`: o conflito vem do banco, não de uma pré-consulta. */
+  @Test
+  void duplicateIsDecidedByTheConstraintNotByAPreviousSelect() {
+    var original = anAccount("Caixa", "BRL", AccountType.ASSET);
+
+    var duplicate = new Account(UUID.randomUUID(), "Caixa", "BRL", AccountType.EXPENSE);
+
+    var exception = assertThrows(AccountAlreadyExistsException.class, () -> repository.save(duplicate));
+
+    assertTrue(exception.getMessage().contains("Caixa"));
+    assertTrue(exception.getMessage().contains("BRL"));
+    assertEquals(1, rowCount());
+    assertEquals(original, repository.findAllByIds(Set.of(original.id())).get(original.id()));
+  }
+
   /**
    * Colisão de PK não é "conta já existe": {@code (name, currency)} é a regra de negócio,
    * {@code id} é infraestrutura. Reusar um id com outro nome sobe

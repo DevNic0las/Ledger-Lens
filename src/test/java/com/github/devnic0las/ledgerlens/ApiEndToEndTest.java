@@ -108,6 +108,38 @@ class ApiEndToEndTest {
     assertEquals(404, response.statusCode());
   }
 
+  /** Criar conta pela API e usar o id gerado numa transação: o caminho que faltava. */
+  @Test
+  void createsAccountThroughTheApiAndUsesTheGeneratedId() throws Exception {
+    jdbc.sql("TRUNCATE TABLE entry, transaction, account").update();
+
+    var created = http.send(HttpRequest.newBuilder(uri("/accounts"))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(
+                    "{\"name\":\"Caixa\",\"currency\":\"BRL\",\"type\":\"ASSET\"}"))
+            .build(), HttpResponse.BodyHandlers.ofString());
+
+    assertEquals(201, created.statusCode());
+    assertEquals("/accounts/" + idOf(created.body()) + "/balance",
+            created.headers().firstValue("Location").orElseThrow());
+  }
+
+  /** O conflito de `(name, currency)` vem da constraint, não de pré-consulta. */
+  @Test
+  void duplicateAccountIs409() throws Exception {
+    jdbc.sql("TRUNCATE TABLE entry, transaction, account").update();
+    var create = HttpRequest.newBuilder(uri("/accounts"))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(
+                    "{\"name\":\"Caixa\",\"currency\":\"BRL\",\"type\":\"ASSET\"}"))
+            .build();
+
+    http.send(create, HttpResponse.BodyHandlers.ofString());
+    var duplicate = http.send(create, HttpResponse.BodyHandlers.ofString());
+
+    assertEquals(409, duplicate.statusCode());
+  }
+
   private HttpResponse<String> post(String body, String idempotencyKey) throws Exception {
     return http.send(HttpRequest.newBuilder(uri("/transactions"))
             .header("Content-Type", "application/json")

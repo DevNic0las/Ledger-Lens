@@ -1,5 +1,6 @@
 package com.github.devnic0las.ledgerlens.ledger.api;
 
+import com.github.devnic0las.ledgerlens.account.domain.exception.AccountAlreadyExistsException;
 import com.github.devnic0las.ledgerlens.account.domain.exception.AccountNotFoundException;
 import com.github.devnic0las.ledgerlens.ledger.domain.exception.AccountsNotFoundException;
 import com.github.devnic0las.ledgerlens.ledger.domain.exception.IdempotencyConflictException;
@@ -62,6 +63,12 @@ class ApiExceptionHandler {
   @ExceptionHandler(AccountNotFoundException.class)
   ProblemDetail accountNotFound(AccountNotFoundException exception) {
     return problem(HttpStatus.NOT_FOUND, "Account not found", exception.getMessage());
+  }
+
+  /** Unicidade `(name, currency)` violada: conflito com estado existente, não erro do pedido. */
+  @ExceptionHandler(AccountAlreadyExistsException.class)
+  ProblemDetail accountAlreadyExists(AccountAlreadyExistsException exception) {
+    return problem(HttpStatus.CONFLICT, "Account already exists", exception.getMessage());
   }
 
   @ExceptionHandler(IdempotencyConflictException.class)
