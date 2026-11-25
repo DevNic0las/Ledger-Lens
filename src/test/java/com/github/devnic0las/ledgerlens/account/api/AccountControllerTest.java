@@ -77,7 +77,7 @@ class AccountControllerTest {
                             {"name":"Conta Corrente","currency":"BRL","type":"ASSET"}
                             """))
             .andExpect(status().isCreated())
-            .andExpect(header().exists("Location"))
+            .andExpect(header().string("Location", "/accounts/" + ACCOUNT_ID))
             .andExpect(jsonPath("$.id").value(ACCOUNT_ID.toString()))
             .andExpect(jsonPath("$.name").value("Conta Corrente"))
             .andExpect(jsonPath("$.currency").value("BRL"))

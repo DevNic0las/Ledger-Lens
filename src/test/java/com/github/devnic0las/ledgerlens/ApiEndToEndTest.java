@@ -120,7 +120,7 @@ class ApiEndToEndTest {
             .build(), HttpResponse.BodyHandlers.ofString());
 
     assertEquals(201, created.statusCode());
-    assertEquals("/accounts/" + idOf(created.body()) + "/balance",
+    assertEquals("/accounts/" + idOf(created.body()),
             created.headers().firstValue("Location").orElseThrow());
   }
 

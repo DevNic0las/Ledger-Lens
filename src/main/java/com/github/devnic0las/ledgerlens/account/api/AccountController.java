@@ -24,7 +24,7 @@ import java.util.UUID;
  * {@code POST /accounts}: cria uma conta e devolve {@code 201} com o id gerado pelo servidor.
  *
  * <ul>
- *   <li>{@code 201} — criada. O {@code Location} aponta para o saldo da conta.</li>
+ *   <li>{@code 201} — criada. O {@code Location} aponta para {@code /accounts/{id}}.</li>
  *   <li>{@code 409} — já existe conta com o mesmo {@code (name, currency)}. O conflito vem da
  *       constraint {@code account_name_currency_key}, não de uma pré-consulta.</li>
  *   <li>{@code 400} — corpo inválido: campo ausente ou em branco, {@code currency} fora de
@@ -50,7 +50,7 @@ class AccountController {
     Account account = createService.create(request.toCommand());
 
     return ResponseEntity
-            .created(URI.create("/accounts/" + account.id() + "/balance"))
+            .created(URI.create("/accounts/" + account.id()))
             .body(AccountResponse.of(account));
   }
 
