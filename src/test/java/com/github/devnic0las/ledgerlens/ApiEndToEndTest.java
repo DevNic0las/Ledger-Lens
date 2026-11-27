@@ -108,7 +108,11 @@ class ApiEndToEndTest {
     assertEquals(404, response.statusCode());
   }
 
-  /** Criar conta pela API e usar o id gerado numa transação: o caminho que faltava. */
+  /**
+   * O {@code Location} do {@code 201} tem que ser seguível: criar a conta, ler a URL anunciada
+   * e receber a mesma conta de volta. Sem o GET, um {@code Location} apontando para o lugar
+   * errado (o saldo, por exemplo) passaria no teste.
+   */
   @Test
   void createsAccountThroughTheApiAndUsesTheGeneratedId() throws Exception {
     jdbc.sql("TRUNCATE TABLE entry, transaction, account").update();
@@ -120,8 +124,16 @@ class ApiEndToEndTest {
             .build(), HttpResponse.BodyHandlers.ofString());
 
     assertEquals(201, created.statusCode());
-    assertEquals("/accounts/" + idOf(created.body()),
-            created.headers().firstValue("Location").orElseThrow());
+
+    var location = created.headers().firstValue("Location").orElseThrow();
+    assertEquals("/accounts/" + idOf(created.body()), location);
+
+    var fetched = get(location);
+    assertEquals(200, fetched.statusCode(), fetched.body());
+    assertTrue(fetched.body().contains("\"id\":\"" + idOf(created.body()) + "\""), fetched.body());
+    assertTrue(fetched.body().contains("\"name\":\"Caixa\""), fetched.body());
+    assertTrue(fetched.body().contains("\"currency\":\"BRL\""), fetched.body());
+    assertTrue(fetched.body().contains("\"type\":\"ASSET\""), fetched.body());
   }
 
   /** O conflito de `(name, currency)` vem da constraint, não de pré-consulta. */
