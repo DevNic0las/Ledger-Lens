@@ -14,6 +14,7 @@ import java.net.http.HttpResponse;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -106,6 +107,31 @@ class ApiEndToEndTest {
     var response = get("/accounts/" + UUID.randomUUID() + "/balance");
 
     assertEquals(404, response.statusCode());
+  }
+
+  /**
+   * Erro inesperado é {@code 500} e a resposta não carrega detalhe interno: nada de stack
+   * trace, nome de exceção ou mensagem de código. Para forçar o caminho sem mexer no
+   * controller, a linha insere uma conta que o construtor do domínio recusaria — um estado
+   * impossível pelo caminho normal, que é exatamente o que 500 significa.
+   */
+  @Test
+  void unexpectedErrorIs500WithoutLeakingInternals() throws Exception {
+    jdbc.sql("TRUNCATE TABLE entry, transaction, account").update();
+    var id = UUID.randomUUID();
+    jdbc.sql("INSERT INTO account (id, name, type, currency) VALUES (:id, 'Caixa', 'ASSET', 'brl')")
+            .param("id", id)
+            .update();
+
+    var response = get("/accounts/" + id);
+
+    assertEquals(500, response.statusCode(), response.body());
+    var body = response.body();
+    assertFalse(body.contains("IllegalArgumentException"), body);
+    assertFalse(body.contains("java."), body);
+    assertFalse(body.contains("at com.github"), body);
+    assertFalse(body.contains("Account currency"), body);
+    assertFalse(body.toLowerCase().contains("exception"), body);
   }
 
   /**
