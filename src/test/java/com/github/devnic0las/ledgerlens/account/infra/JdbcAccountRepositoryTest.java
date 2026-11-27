@@ -87,6 +87,21 @@ class JdbcAccountRepositoryTest {
     assertEquals(1, rowCount());
   }
 
+  /** O `ON CONFLICT` nomeia `(name, currency)`: o conflito vem do banco, não de uma pré-consulta. */
+  @Test
+  void duplicateIsDecidedByTheConstraintNotByAPreviousSelect() {
+    var original = anAccount("Caixa", "BRL", AccountType.ASSET);
+
+    var duplicate = new Account(UUID.randomUUID(), "Caixa", "BRL", AccountType.EXPENSE);
+
+    var exception = assertThrows(AccountAlreadyExistsException.class, () -> repository.save(duplicate));
+
+    assertTrue(exception.getMessage().contains("Caixa"));
+    assertTrue(exception.getMessage().contains("BRL"));
+    assertEquals(1, rowCount());
+    assertEquals(original, repository.findAllByIds(Set.of(original.id())).get(original.id()));
+  }
+
   /**
    * Colisão de PK não é "conta já existe": {@code (name, currency)} é a regra de negócio,
    * {@code id} é infraestrutura. Reusar um id com outro nome sobe
@@ -110,6 +125,58 @@ class JdbcAccountRepositoryTest {
     var found = repository.findAllByIds(Set.of(inBrl.id(), inUsd.id()));
 
     assertEquals(2, found.size());
+  }
+
+  @Test
+  void findsOneAccountById() {
+    var account = anAccount("Conta Corrente", "BRL", AccountType.ASSET);
+    anAccount("Conta Receita", "BRL", AccountType.REVENUE);
+
+    var found = repository.findById(account.id());
+
+    assertTrue(found.isPresent());
+    assertEquals(account, found.get());
+  }
+
+  @Test
+  void answersAbsentForUnknownId() {
+    anAccount("Conta Corrente", "BRL", AccountType.ASSET);
+
+    assertTrue(repository.findById(UUID.randomUUID()).isEmpty());
+  }
+
+  @Test
+  void listsEveryAccount() {
+    var checking = anAccount("Conta Corrente", "BRL", AccountType.ASSET);
+    var revenue = anAccount("Conta Receita", "USD", AccountType.REVENUE);
+    var cash = anAccount("Caixa", "BRL", AccountType.EXPENSE);
+
+    var all = repository.findAll();
+
+    assertEquals(3, all.size());
+    assertTrue(all.containsAll(java.util.List.of(checking, revenue, cash)));
+  }
+
+  @Test
+  void listsEmptyWhenNoAccountExists() {
+    assertTrue(repository.findAll().isEmpty());
+  }
+
+  /**
+   * Ordem estável por {@code name, currency}, e não pela ordem de inserção. Inserir na ordem
+   * inversa é o que distingue as duas: sem o {@code ORDER BY}, o Postgres devolve o que o heap
+   * tiver, e o teste passaria por acaso enquanto a ordem não fosse garantida.
+   *
+   * <p>A moeda desempata o nome repetido, então "Caixa" tem que vir em BRL antes de USD.
+   */
+  @Test
+  void listsAccountsByNameThenCurrency() {
+    var usd = anAccount("Caixa", "USD", AccountType.ASSET);
+    var revenue = anAccount("Conta Receita", "BRL", AccountType.REVENUE);
+    var brl = anAccount("Caixa", "BRL", AccountType.ASSET);
+    var checking = anAccount("Conta Corrente", "BRL", AccountType.ASSET);
+
+    assertEquals(java.util.List.of(brl, usd, checking, revenue), repository.findAll());
   }
 
   private Account anAccount(String name, String currency, AccountType type) {

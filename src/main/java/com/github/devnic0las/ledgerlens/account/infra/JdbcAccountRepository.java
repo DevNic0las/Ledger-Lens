@@ -7,7 +7,11 @@ import com.github.devnic0las.ledgerlens.account.domain.exception.AccountAlreadyE
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -65,13 +69,45 @@ public class JdbcAccountRepository implements AccountRepository {
                     WHERE id IN (:ids)
                     """)
             .param("ids", ids)
-            .query((rs, rowNum) -> new Account(
-                    rs.getObject("id", UUID.class),
-                    rs.getString("name"),
-                    rs.getString("currency"),
-                    AccountType.valueOf(rs.getString("type"))))
+            .query(this::mapAccount)
             .list()
             .stream()
             .collect(Collectors.toMap(Account::id, Function.identity()));
+  }
+
+  @Override
+  public Optional<Account> findById(UUID id) {
+    return jdbc.sql("""
+                    SELECT id, name, currency, type
+                    FROM account
+                    WHERE id = :id
+                    """)
+            .param("id", id)
+            .query(this::mapAccount)
+            .optional();
+  }
+
+  /**
+   * Ordem estável por {@code name, currency} — a mesma que a constraint de unicidade usa.
+   * Não há coluna de data de criação: ordenar por {@code id} seria arbitrário e variaria a
+   * cada chamada.
+   */
+  @Override
+  public List<Account> findAll() {
+    return jdbc.sql("""
+                    SELECT id, name, currency, type
+                    FROM account
+                    ORDER BY name, currency
+                    """)
+            .query(this::mapAccount)
+            .list();
+  }
+
+  private Account mapAccount(ResultSet rs, int rowNum) throws SQLException {
+    return new Account(
+            rs.getObject("id", UUID.class),
+            rs.getString("name"),
+            rs.getString("currency"),
+            AccountType.valueOf(rs.getString("type")));
   }
 }

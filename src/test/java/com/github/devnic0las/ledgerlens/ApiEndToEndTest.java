@@ -14,6 +14,7 @@ import java.net.http.HttpResponse;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -106,6 +107,75 @@ class ApiEndToEndTest {
     var response = get("/accounts/" + UUID.randomUUID() + "/balance");
 
     assertEquals(404, response.statusCode());
+  }
+
+  /**
+   * Erro inesperado é {@code 500} e a resposta não carrega detalhe interno: nada de stack
+   * trace, nome de exceção ou mensagem de código. Para forçar o caminho sem mexer no
+   * controller, a linha insere uma conta que o construtor do domínio recusaria — um estado
+   * impossível pelo caminho normal, que é exatamente o que 500 significa.
+   */
+  @Test
+  void unexpectedErrorIs500WithoutLeakingInternals() throws Exception {
+    jdbc.sql("TRUNCATE TABLE entry, transaction, account").update();
+    var id = UUID.randomUUID();
+    jdbc.sql("INSERT INTO account (id, name, type, currency) VALUES (:id, 'Caixa', 'ASSET', 'brl')")
+            .param("id", id)
+            .update();
+
+    var response = get("/accounts/" + id);
+
+    assertEquals(500, response.statusCode(), response.body());
+    var body = response.body();
+    assertFalse(body.contains("IllegalArgumentException"), body);
+    assertFalse(body.contains("java."), body);
+    assertFalse(body.contains("at com.github"), body);
+    assertFalse(body.contains("Account currency"), body);
+    assertFalse(body.toLowerCase().contains("exception"), body);
+  }
+
+  /**
+   * O {@code Location} do {@code 201} tem que ser seguível: criar a conta, ler a URL anunciada
+   * e receber a mesma conta de volta. Sem o GET, um {@code Location} apontando para o lugar
+   * errado (o saldo, por exemplo) passaria no teste.
+   */
+  @Test
+  void createsAccountThroughTheApiAndUsesTheGeneratedId() throws Exception {
+    jdbc.sql("TRUNCATE TABLE entry, transaction, account").update();
+
+    var created = http.send(HttpRequest.newBuilder(uri("/accounts"))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(
+                    "{\"name\":\"Caixa\",\"currency\":\"BRL\",\"type\":\"ASSET\"}"))
+            .build(), HttpResponse.BodyHandlers.ofString());
+
+    assertEquals(201, created.statusCode());
+
+    var location = created.headers().firstValue("Location").orElseThrow();
+    assertEquals("/accounts/" + idOf(created.body()), location);
+
+    var fetched = get(location);
+    assertEquals(200, fetched.statusCode(), fetched.body());
+    assertTrue(fetched.body().contains("\"id\":\"" + idOf(created.body()) + "\""), fetched.body());
+    assertTrue(fetched.body().contains("\"name\":\"Caixa\""), fetched.body());
+    assertTrue(fetched.body().contains("\"currency\":\"BRL\""), fetched.body());
+    assertTrue(fetched.body().contains("\"type\":\"ASSET\""), fetched.body());
+  }
+
+  /** O conflito de `(name, currency)` vem da constraint, não de pré-consulta. */
+  @Test
+  void duplicateAccountIs409() throws Exception {
+    jdbc.sql("TRUNCATE TABLE entry, transaction, account").update();
+    var create = HttpRequest.newBuilder(uri("/accounts"))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(
+                    "{\"name\":\"Caixa\",\"currency\":\"BRL\",\"type\":\"ASSET\"}"))
+            .build();
+
+    http.send(create, HttpResponse.BodyHandlers.ofString());
+    var duplicate = http.send(create, HttpResponse.BodyHandlers.ofString());
+
+    assertEquals(409, duplicate.statusCode());
   }
 
   private HttpResponse<String> post(String body, String idempotencyKey) throws Exception {

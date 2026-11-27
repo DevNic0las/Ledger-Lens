@@ -3,7 +3,7 @@
 > **Este documento é histórico, não um retrato do presente.** Cada seção abaixo descreve o
 > repositório **no momento da inspeção indicada**. Seções antigas não são reescritas: quando o
 > estado muda, uma nova inspeção datada é acrescentada ao final. Para o estado corrente, leia a
-> **última inspeção** ([19/11/2026](#inspeção-de-2026-11-19--etapa-3-concluída)).
+> **última inspeção** ([27/11/2026](#inspeção-de-2026-11-27--etapa-4-get-accounts)).
 
 Relatório gerado a partir da inspeção do repositório na branch `docs/readme-and-status`
 (base: `main` em `cdffa99`). Nada aqui foi inferido de intenção ou de mensagem de commit:
@@ -470,3 +470,141 @@ tradução da duplicidade para `DUPLICATE`; `Ledger` thread-safe.
 `README-LEDGER-LENS.md` foi removido nesta data: era uma variante antiga do `README.md`
 (afirmava "se um dia existirem adaptadores" quando o adaptador JDBC já existia). O
 `README.md` é o único documento vivo do estado corrente.
+
+---
+
+# Inspeção de 2026-11-25 — etapa 4 concluída (API REST)
+
+A inspeção de 19/11 encerrou com "sem API REST e sem camada `application`". Nesta data as duas
+lacunas foram fechadas: existe `@Service` para cada caso de uso, `@RestController` para cada
+recurso, e a tradução de exceção para status fica num `@RestControllerAdvice`.
+
+## O que passou a existir
+
+| Endpoint | Camadas | Status |
+|----------|---------|--------|
+| `POST /accounts` | `CreateAccountService` → `AccountRepository` (`ON CONFLICT` na `V2`) | `201` + `Location: /accounts/{id}`, `409`, `400` |
+| `GET /accounts` | `AccountQueryService.findAll` → `JdbcAccountRepository.findAll` | `200`, lista vazia é `[]` |
+| `GET /accounts/{id}` | `AccountQueryService.findById` (porta devolve `Optional`) | `200`, `404`, `400` |
+| `GET /accounts/{id}/balance` | `AccountBalanceService.balanceOf` (`OptionalLong`) | `200`, `404`, `400` |
+| `POST /transactions` | `PostTransactionService` → `JdbcLedgerRepository` | `201`, `200`, `409`, `422`, `400` |
+
+Erros seguem RFC 9457 (`application/problem+json`) com `title`/`detail`/`instance`, e
+`AccountsNotFoundException` acrescenta `missingAccountIds`.
+
+## Itens 1, 2 e 7 da inspeção anterior
+
+1. **Sem API REST e sem `application` — resolvido.** `@Transactional` vive nos serviços, não no
+   controller nem no adaptador. `AccountController`, `TransactionController` e
+   `ApiExceptionHandler` em `*/api`; `CreateAccountService`, `AccountQueryService`,
+   `AccountBalanceService`, `PostTransactionService` em `*/application`.
+2. **Sem porta/adaptador para `Account` — resolvido.** `AccountRepository` (domínio) com
+   `save`, `findAllByIds`, `findById`, `findAll`; `JdbcAccountRepository` implementa.
+3. **Sem endpoints de domínio no OpenAPI — resolvido.** `/v3/api-docs` lista os quatro paths.
+
+## O que continua aberto
+
+Os itens 3 a 9 da inspeção de 19/11 seguem abertos, sem regressão: lançamentos mutáveis no
+banco, banco sem validar balanceamento/moeda, bordas de `long`/`null`, ausência de estorno,
+`idempotency_key` global, leitura em dois statements.
+
+**`Entry.id` repetido continua sem validação** — a assimetria com `Transaction.id` não foi
+tratada nesta etapa e permanece como dívida conhecida, não como decisão. Nenhuma data foi
+decidida.
+
+Duas limitações nasceram com a API e estão registradas no `README`:
+
+- `GET /accounts` não pagina: devolve a tabela inteira.
+- Não há `GET /transactions`: transação só é relida pela chave de idempotência.
+- Não há autenticação: qualquer cliente que alcance a porta escreve no razão.
+
+## Resultado do build
+
+```
+$ ./mvnw -B verify
+Tests run: 127, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+Distribuição: `AccountControllerTest` 13, `JdbcLedgerRepositoryTest` 13,
+`JdbcAccountRepositoryTest` 12, `PostTransactionServiceTest` 10, `LedgerSchemaTest` 10,
+`TransactionControllerTest` 9, `JdbcLedgerRepositoryBalanceTest` 9, `LedgerTest` 7,
+`IdempotencyContentTest` 7, `ApiEndToEndTest` 7, `AccountTest` 7, `TransactionTest` 6,
+`CreateAccountCommandTest` 4, `AccountQueryServiceTest` 4, `AccountBalanceServiceTest` 3,
+`AccountBalanceServiceErrorTest` 3, `JdbcLedgerRepositoryConcurrencyTest` 2,
+`LedgerlensApplicationTests` 1.
+
+Além da suíte, um fluxo `curl` de 18 passos foi executado contra o jar e um Postgres 17 reais
+(transcrito no `README`, seção 3): todos os passos responderam o status esperado.
+
+---
+
+# Inspeção de 2026-11-27 — etapa 4, `GET /accounts` (branch `feat/etapa-4-get-accounts`)
+
+Inspeção da branch `feat/etapa-4-get-accounts`, que adiciona `GET /accounts` e
+`GET /accounts/{id}` sobre a etapa 4. Base: `origin/main` em `ac102ed`. Nada acima foi
+reescrito.
+
+## O que mudou
+
+| Item | Antes | Agora |
+|------|-------|-------|
+| `Location` do `POST /accounts` | `/accounts/{id}/balance` (não existia `GET /accounts/{id}`) | `/accounts/{id}`, seguível pelo cliente |
+| `GET /accounts` | não existia | `200` com a lista ordenada por `name, currency`; vazio é `[]` |
+| `GET /accounts/{id}` | não existia | `200`; `404` conta inexistente; `400` id fora de UUID |
+| Ordem do `findAll` | não fixada por teste | `ORDER BY name, currency`, provado inserindo fora de ordem |
+| E2E do `Location` | só comparava o header ao id do corpo | segue o header com `GET` e confere `id`/`name`/`currency`/`type` |
+| `500` | documentado só no javadoc do `ApiExceptionHandler` | linha na tabela do README, com prova ponta a ponta de que a resposta não vaza detalhe interno |
+
+O `500` não é um handler nosso: `IllegalArgumentException` genérico continua sem mapeamento de
+propósito. O corpo observado no teste foi
+`{"timestamp":"...","status":500,"error":"Internal Server Error","path":"/accounts/..."}`, sem
+`detail`, sem mensagem e sem stack trace.
+
+## Dívidas abertas
+
+Tabela única, consolidada a partir das inspeções de 17/11, 19/11, 25/11 e 27/11. A coluna
+"registrada em" é a data em que a dívida apareceu no documento pela primeira vez; a inspeção
+corrente repete toda dívida ainda aberta, não só a que nasceu nela.
+
+| Dívida | Registrada em | Status |
+|---|---|---|
+| Lançamentos mutáveis no banco: `UPDATE`/`DELETE` em `entry` aceitos, sem `REVOKE` nem trigger; imutabilidade só no modelo Java | 19/11 | Aberta |
+| Banco não valida balanceamento nem moeda: aceita transação desbalanceada e mistura de moedas; `currency` é `CHAR(3)` sem `CHECK` de formato | 19/11 | Aberta |
+| Bordas do domínio: overflow de `long` fecha transação desbalanceada; `direction = null` conta como crédito; `Entry.id` sem validação de nulidade nem de duplicidade (assimetria com `Transaction.id`) | 19/11 | Aberta |
+| Sem estorno: não há operação, tipo de lançamento nem coluna ligando um lançamento ao original | 19/11 | Aberta |
+| `idempotency_key` global, sem escopo por cliente/conta e sem `CHECK` de tamanho | 19/11 | Aberta |
+| Leitura header + entries em dois statements, sem transação de leitura; escrita concorrente entre os dois pode dar leitura inconsistente | 19/11 | Aberta |
+| Proteção da `main` não verificável: `gh` não está no ambiente e a API responde `401` sem token; a configuração não vive no repositório | 19/11 (inalterada desde 17/11) | Aberta |
+| `GET /accounts` não pagina: devolve a tabela inteira, sem `LIMIT`/`OFFSET` nem envelope com metadados | 25/11 | Aberta |
+| Não há `GET /transactions`: transação só é relida pela chave de idempotência | 25/11 | Aberta |
+| Sem autenticação: qualquer cliente que alcance a porta cria conta e posta transação | 25/11 | Aberta |
+| O teste do `500` depende de o schema não validar ISO 4217: `ApiEndToEndTest.unexpectedErrorIs500WithoutLeakingInternals` grava `currency = 'brl'` direto no banco porque só o construtor de `Account` recusa a moeda | 27/11 | Aberta — gatilho acordado em 27/11: se o `CHECK (currency ~ '[A-Z]{3}')` entrar, o teste é reescrito para injetar falha no adaptador, **não** afrouxado; a garantia de não vazar detalhe interno é o ponto do teste |
+
+Fechadas nas inspeções de 25/11 e 27/11, e por isso fora da tabela: sem API REST e sem camada
+`application` (19/11), sem porta/adaptador para `Account` (19/11), `application.yaml` sem
+datasource e springdoc sem endpoints (19/11), testes de concorrência no nível do banco (19/11).
+
+`docs/STATUS.md` é histórico por decisão: a seção de 25/11 continua com a contagem daquele dia
+(127); a contagem corrente é a desta seção.
+
+## Resultado do build
+
+```
+$ ./mvnw -B verify
+Tests run: 129, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+Distribuição: `AccountControllerTest` 13, `JdbcAccountRepositoryTest` 13,
+`JdbcLedgerRepositoryTest` 13, `PostTransactionServiceTest` 10, `LedgerSchemaTest` 10,
+`TransactionControllerTest` 9, `JdbcLedgerRepositoryBalanceTest` 9, `ApiEndToEndTest` 8,
+`LedgerTest` 7, `IdempotencyContentTest` 7, `AccountTest` 7, `TransactionTest` 6,
+`AccountQueryServiceTest` 4, `CreateAccountCommandTest` 4, `AccountBalanceServiceTest` 3,
+`AccountBalanceServiceErrorTest` 3, `JdbcLedgerRepositoryConcurrencyTest` 2,
+`LedgerlensApplicationTests` 1.
+
+A soma bate: 129. Frente à inspeção de 25/11 (127), entraram
+`JdbcAccountRepositoryTest.listsAccountsByNameThenCurrency` e
+`ApiEndToEndTest.unexpectedErrorIs500WithoutLeakingInternals`, e o e2e do `Location` passou a
+seguir o header.

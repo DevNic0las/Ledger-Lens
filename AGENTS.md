@@ -6,4 +6,6 @@ Regras de trabalho neste repositório (ledgerlens):
 - Dinheiro sempre em long (centavos). Nunca double.
 - Ao terminar, me faça 2 perguntas sobre o que você implementou, para eu confirmar que entendi.
 - Rode ./mvnw test e mostre o resultado antes de dizer que terminou.
+- Dívidas abertas registradas em docs/STATUS.md devem ser repetidas na inspeção seguinte, com a data de origem (a data da inspeção em que a dívida apareceu). O histórico não se reescreve, mas a inspeção corrente lista toda dívida ainda aberta — não só a que nasceu nela.
+- Dívidas abertas vão numa tabela única (dívida, registrada em, status), não em prosa repetida. "Data de origem" é a data em que a dívida foi registrada no documento. "Inspeção seguinte" é a ordem no arquivo; duas inspeções no mesmo dia levam sufixo `(2)`, `(3)` no título.
 - Não faça perguntas sobre nomes, formatação ou artefatos auxiliares. Decida pelo mais simples e siga em frente. Pergunte só quando a decisão afetar o design, o escopo ou as regras do domínio.
