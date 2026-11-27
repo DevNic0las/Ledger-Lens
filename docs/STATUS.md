@@ -561,22 +561,32 @@ propósito. O corpo observado no teste foi
 `{"timestamp":"...","status":500,"error":"Internal Server Error","path":"/accounts/..."}`, sem
 `detail`, sem mensagem e sem stack trace.
 
-## O que continua aberto
+## Dívidas abertas
 
-- `GET /accounts` não pagina.
-- Não há `GET /transactions`.
-- Sem autenticação.
-- **Dívida: o teste do `500` depende do schema não validar ISO 4217.**
-  `ApiEndToEndTest.unexpectedErrorIs500WithoutLeakingInternals` força o caminho de erro gravando
-  uma conta com `currency = 'brl'` direto no banco, porque a coluna é `CHAR(3)` sem `CHECK` de
-  formato e só o construtor de `Account` recusa a moeda. Se um dia o schema ganhar
-  `CHECK (currency ~ '[A-Z]{3}')` (item já listado como correção de integridade), o `INSERT` do
-  teste passa a falhar com violação de constraint e o gatilho do `500` precisa mudar. Gatilho
-  acordado em 27/11: o teste será reescrito para injetar falha no adaptador — e não afrouxado.
-  Não é urgente, mas o teste não pode ser "consertado" afrouxando os asserts: a garantia de que a
-  resposta não vaza detalhe interno é o ponto dele.
-- `docs/STATUS.md` é histórico por decisão: a seção de 25/11 continua com a contagem daquele dia
-  (127); a contagem corrente é a desta seção.
+Tabela única, consolidada a partir das inspeções de 17/11, 19/11, 25/11 e 27/11. A coluna
+"registrada em" é a data em que a dívida apareceu no documento pela primeira vez; a inspeção
+corrente repete toda dívida ainda aberta, não só a que nasceu nela.
+
+| Dívida | Registrada em | Status |
+|---|---|---|
+| Lançamentos mutáveis no banco: `UPDATE`/`DELETE` em `entry` aceitos, sem `REVOKE` nem trigger; imutabilidade só no modelo Java | 19/11 | Aberta |
+| Banco não valida balanceamento nem moeda: aceita transação desbalanceada e mistura de moedas; `currency` é `CHAR(3)` sem `CHECK` de formato | 19/11 | Aberta |
+| Bordas do domínio: overflow de `long` fecha transação desbalanceada; `direction = null` conta como crédito; `Entry.id` sem validação de nulidade nem de duplicidade (assimetria com `Transaction.id`) | 19/11 | Aberta |
+| Sem estorno: não há operação, tipo de lançamento nem coluna ligando um lançamento ao original | 19/11 | Aberta |
+| `idempotency_key` global, sem escopo por cliente/conta e sem `CHECK` de tamanho | 19/11 | Aberta |
+| Leitura header + entries em dois statements, sem transação de leitura; escrita concorrente entre os dois pode dar leitura inconsistente | 19/11 | Aberta |
+| Proteção da `main` não verificável: `gh` não está no ambiente e a API responde `401` sem token; a configuração não vive no repositório | 19/11 (inalterada desde 17/11) | Aberta |
+| `GET /accounts` não pagina: devolve a tabela inteira, sem `LIMIT`/`OFFSET` nem envelope com metadados | 25/11 | Aberta |
+| Não há `GET /transactions`: transação só é relida pela chave de idempotência | 25/11 | Aberta |
+| Sem autenticação: qualquer cliente que alcance a porta cria conta e posta transação | 25/11 | Aberta |
+| O teste do `500` depende de o schema não validar ISO 4217: `ApiEndToEndTest.unexpectedErrorIs500WithoutLeakingInternals` grava `currency = 'brl'` direto no banco porque só o construtor de `Account` recusa a moeda | 27/11 | Aberta — gatilho acordado em 27/11: se o `CHECK (currency ~ '[A-Z]{3}')` entrar, o teste é reescrito para injetar falha no adaptador, **não** afrouxado; a garantia de não vazar detalhe interno é o ponto do teste |
+
+Fechadas nas inspeções de 25/11 e 27/11, e por isso fora da tabela: sem API REST e sem camada
+`application` (19/11), sem porta/adaptador para `Account` (19/11), `application.yaml` sem
+datasource e springdoc sem endpoints (19/11), testes de concorrência no nível do banco (19/11).
+
+`docs/STATUS.md` é histórico por decisão: a seção de 25/11 continua com a contagem daquele dia
+(127); a contagem corrente é a desta seção.
 
 ## Resultado do build
 
