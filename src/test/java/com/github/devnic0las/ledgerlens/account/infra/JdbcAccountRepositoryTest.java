@@ -162,6 +162,23 @@ class JdbcAccountRepositoryTest {
     assertTrue(repository.findAll().isEmpty());
   }
 
+  /**
+   * Ordem estável por {@code name, currency}, e não pela ordem de inserção. Inserir na ordem
+   * inversa é o que distingue as duas: sem o {@code ORDER BY}, o Postgres devolve o que o heap
+   * tiver, e o teste passaria por acaso enquanto a ordem não fosse garantida.
+   *
+   * <p>A moeda desempata o nome repetido, então "Caixa" tem que vir em BRL antes de USD.
+   */
+  @Test
+  void listsAccountsByNameThenCurrency() {
+    var usd = anAccount("Caixa", "USD", AccountType.ASSET);
+    var revenue = anAccount("Conta Receita", "BRL", AccountType.REVENUE);
+    var brl = anAccount("Caixa", "BRL", AccountType.ASSET);
+    var checking = anAccount("Conta Corrente", "BRL", AccountType.ASSET);
+
+    assertEquals(java.util.List.of(brl, usd, checking, revenue), repository.findAll());
+  }
+
   private Account anAccount(String name, String currency, AccountType type) {
     var account = new Account(UUID.randomUUID(), name, currency, type);
     repository.save(account);
