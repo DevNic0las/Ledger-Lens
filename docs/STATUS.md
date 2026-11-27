@@ -566,6 +566,15 @@ propósito. O corpo observado no teste foi
 - `GET /accounts` não pagina.
 - Não há `GET /transactions`.
 - Sem autenticação.
+- **Dívida: o teste do `500` depende do schema não validar ISO 4217.**
+  `ApiEndToEndTest.unexpectedErrorIs500WithoutLeakingInternals` força o caminho de erro gravando
+  uma conta com `currency = 'brl'` direto no banco, porque a coluna é `CHAR(3)` sem `CHECK` de
+  formato e só o construtor de `Account` recusa a moeda. Se um dia o schema ganhar
+  `CHECK (currency ~ '[A-Z]{3}')` (item já listado como correção de integridade), o `INSERT` do
+  teste passa a falhar com violação de constraint e o gatilho do `500` precisa mudar — por
+  exemplo, um estado impossível diferente ou uma falha injetada no adaptador. Não é urgente,
+  mas o teste não pode ser "consertado" afrouxando os asserts: a garantia de que a resposta não
+  vaza detalhe interno é o ponto dele.
 - `docs/STATUS.md` é histórico por decisão: a seção de 25/11 continua com a contagem daquele dia
   (127); a contagem corrente é a desta seção.
 
