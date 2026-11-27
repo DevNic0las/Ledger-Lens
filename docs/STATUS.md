@@ -3,7 +3,7 @@
 > **Este documento é histórico, não um retrato do presente.** Cada seção abaixo descreve o
 > repositório **no momento da inspeção indicada**. Seções antigas não são reescritas: quando o
 > estado muda, uma nova inspeção datada é acrescentada ao final. Para o estado corrente, leia a
-> **última inspeção** ([19/11/2026](#inspeção-de-2026-11-19--etapa-3-concluída)).
+> **última inspeção** ([27/11/2026](#inspeção-de-2026-11-27--etapa-4-get-accounts)).
 
 Relatório gerado a partir da inspeção do repositório na branch `docs/readme-and-status`
 (base: `main` em `cdffa99`). Nada aqui foi inferido de intenção ou de mensagem de commit:
@@ -536,3 +536,56 @@ Distribuição: `AccountControllerTest` 13, `JdbcLedgerRepositoryTest` 13,
 
 Além da suíte, um fluxo `curl` de 18 passos foi executado contra o jar e um Postgres 17 reais
 (transcrito no `README`, seção 3): todos os passos responderam o status esperado.
+
+---
+
+# Inspeção de 2026-11-27 — etapa 4, `GET /accounts` (branch `feat/etapa-4-get-accounts`)
+
+Inspeção da branch `feat/etapa-4-get-accounts`, que adiciona `GET /accounts` e
+`GET /accounts/{id}` sobre a etapa 4. Base: `origin/main` em `ac102ed`. Nada acima foi
+reescrito.
+
+## O que mudou
+
+| Item | Antes | Agora |
+|------|-------|-------|
+| `Location` do `POST /accounts` | `/accounts/{id}/balance` (não existia `GET /accounts/{id}`) | `/accounts/{id}`, seguível pelo cliente |
+| `GET /accounts` | não existia | `200` com a lista ordenada por `name, currency`; vazio é `[]` |
+| `GET /accounts/{id}` | não existia | `200`; `404` conta inexistente; `400` id fora de UUID |
+| Ordem do `findAll` | não fixada por teste | `ORDER BY name, currency`, provado inserindo fora de ordem |
+| E2E do `Location` | só comparava o header ao id do corpo | segue o header com `GET` e confere `id`/`name`/`currency`/`type` |
+| `500` | documentado só no javadoc do `ApiExceptionHandler` | linha na tabela do README, com prova ponta a ponta de que a resposta não vaza detalhe interno |
+
+O `500` não é um handler nosso: `IllegalArgumentException` genérico continua sem mapeamento de
+propósito. O corpo observado no teste foi
+`{"timestamp":"...","status":500,"error":"Internal Server Error","path":"/accounts/..."}`, sem
+`detail`, sem mensagem e sem stack trace.
+
+## O que continua aberto
+
+- `GET /accounts` não pagina.
+- Não há `GET /transactions`.
+- Sem autenticação.
+- `docs/STATUS.md` é histórico por decisão: a seção de 25/11 continua com a contagem daquele dia
+  (127); a contagem corrente é a desta seção.
+
+## Resultado do build
+
+```
+$ ./mvnw -B verify
+Tests run: 129, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+```
+
+Distribuição: `AccountControllerTest` 13, `JdbcAccountRepositoryTest` 13,
+`JdbcLedgerRepositoryTest` 13, `PostTransactionServiceTest` 10, `LedgerSchemaTest` 10,
+`TransactionControllerTest` 9, `JdbcLedgerRepositoryBalanceTest` 9, `ApiEndToEndTest` 8,
+`LedgerTest` 7, `IdempotencyContentTest` 7, `AccountTest` 7, `TransactionTest` 6,
+`AccountQueryServiceTest` 4, `CreateAccountCommandTest` 4, `AccountBalanceServiceTest` 3,
+`AccountBalanceServiceErrorTest` 3, `JdbcLedgerRepositoryConcurrencyTest` 2,
+`LedgerlensApplicationTests` 1.
+
+A soma bate: 129. Frente à inspeção de 25/11 (127), entraram
+`JdbcAccountRepositoryTest.listsAccountsByNameThenCurrency` e
+`ApiEndToEndTest.unexpectedErrorIs500WithoutLeakingInternals`, e o e2e do `Location` passou a
+seguir o header.

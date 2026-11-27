@@ -51,7 +51,7 @@ Pré-requisitos reais do que existe hoje:
 ./mvnw -B verify
 ```
 
-Resultado nesta inspeção: **127 testes, 0 falhas, `BUILD SUCCESS`**.
+Resultado nesta inspeção: **129 testes, 0 falhas, `BUILD SUCCESS`**.
 
 | Classe | Testes | O que prova |
 |--------|-------:|-------------|
@@ -59,14 +59,14 @@ Resultado nesta inspeção: **127 testes, 0 falhas, `BUILD SUCCESS`**.
 | `JdbcLedgerRepositoryTest` | 13 | Gravação, leitura, idempotência, rollback, retry em transação do chamador |
 | `JdbcLedgerRepositoryBalanceTest` | 9 | Saldo em SQL e paridade com o domínio nos 5 tipos de conta |
 | `JdbcLedgerRepositoryConcurrencyTest` | 2 | Duas threads na mesma chave: 1 `POSTED` + 1 `DUPLICATE` |
-| `JdbcAccountRepositoryTest` | 12 | Round-trip de conta, `IN (:ids)`, `findById`, `findAll`, unicidade `(name, currency)`, PK ≠ regra de negócio |
+| `JdbcAccountRepositoryTest` | 13 | Round-trip de conta, `IN (:ids)`, `findById`, `findAll` e sua ordem `name, currency`, unicidade `(name, currency)`, PK ≠ regra de negócio |
 | `PostTransactionServiceTest` | 10 | Caso de uso: validação de contas, `POSTED`/`DUPLICATE`, conflito, atomicidade |
 | `AccountBalanceServiceTest` | 3 | Saldo pela aplicação e 404 na conta inexistente |
 | `AccountBalanceServiceErrorTest` | 3 | Falha de infraestrutura propaga e não vira 404 |
 | `AccountQueryServiceTest` | 4 | `findById`/`findAll` contra Postgres; ausência vira 404, lista vazia não |
 | `TransactionControllerTest` | 9 | Tradução de exceção para 201/200/409/422/400 |
 | `AccountControllerTest` | 13 | `POST /accounts` (201/409/400), `GET /accounts` (200), `GET /accounts/{id}` (200/404/400), `GET /accounts/{id}/balance` (200/404/400) |
-| `ApiEndToEndTest` | 7 | Servidor + Postgres reais: criação e leitura de conta, `Location`, idempotência, 409, 422, 400, 404 |
+| `ApiEndToEndTest` | 8 | Servidor + Postgres reais: criação e leitura de conta seguindo o `Location`, `500` sem detalhe interno, idempotência, 409, 422, 400, 404 |
 | `CreateAccountCommandTest` | 4 | Id gerado no servidor, campos obrigatórios, formato delegado ao domínio |
 | `IdempotencyContentTest` | 7 | Identidade da idempotência (descrição + multiconjunto de lançamentos) |
 | `AccountTest` | 7 | Invariantes de `Account` |
@@ -110,8 +110,17 @@ A aplicação sobe em `http://localhost:8080`. Endpoints da etapa 4:
 | `POST /transactions` | `201` gravado · `200` duplicata (devolve a original) · `409` chave com conteúdo diferente · `422` regra violada (desbalanceada, conta inexistente, valor ≤ 0) · `400` pedido malformado ou sem `Idempotency-Key` |
 | `GET /actuator/health` | `200 {"status":"UP"}` |
 | `GET /v3/api-docs` | `200`, agora com os paths reais |
+| qualquer endpoint | `500` erro inesperado (bug, estado impossível) · corpo sem detalhe interno: sem stack trace, sem nome de exceção, sem mensagem de código |
 
-Erros usam RFC 9457 (`application/problem+json`).
+Erros usam RFC 9457 (`application/problem+json`). A única exceção é o `500`, que vem do
+tratamento padrão do Spring e não de um handler nosso: o corpo é
+`{"timestamp":...,"status":500,"error":"Internal Server Error","path":...}`, sem `detail` e sem
+`message` — nada de stack trace, nome de classe ou mensagem de exceção. Isso é deliberado: não
+existe `@ExceptionHandler` para `IllegalArgumentException` genérico, porque transformar bug de
+programação em "o pedido do cliente está errado" (`422`) esconde o defeito. O caminho é provado
+ponta a ponta em `ApiEndToEndTest.unexpectedErrorIs500WithoutLeakingInternals`, que grava uma
+linha que o domínio recusaria e confere que o corpo não contém `java.`, `at com.github` nem
+texto de exceção.
 
 O `POST /accounts` não aceita `id` no corpo: o servidor gera, então o cliente não colide com
 PK. O conflito de nome é decidido pela constraint `account_name_currency_key` (migration `V2`),
@@ -261,7 +270,7 @@ domínio — aceitável hoje, mas a resolver se um dos dois crescer.
 | 2 | Saldo calculado em SQL | **CONCLUÍDA** — uma query, sem coluna de saldo, paridade com o domínio nos 5 tipos |
 | 3 | Idempotência e atomicidade no banco | **CONCLUÍDA** — `ON CONFLICT DO NOTHING`, concorrência testada, retry em transação do chamador |
 | 4 | API REST | **CONCLUÍDA** — `POST /accounts`, `GET /accounts`, `GET /accounts/{id}`, `GET /accounts/{id}/balance`, `POST /transactions`; erros em RFC 9457 |
-| 5 | Fechamento (e2e + README) | **CONCLUÍDA** — suíte com 127 testes e fluxo `curl` de 18 passos contra servidor e Postgres reais |
+| 5 | Fechamento (e2e + README) | **CONCLUÍDA** — suíte com 129 testes e fluxo `curl` de 18 passos contra servidor e Postgres reais |
 
 O que funciona hoje, pela API e contra o Postgres: criar e ler contas, postar transação com
 idempotência, e consultar saldo derivado. Não há autenticação, paginação, estorno nem
